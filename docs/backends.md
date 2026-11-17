@@ -152,7 +152,12 @@ text and a text zoom control. Its compact footer lists these keyboard commands:
 | I / K | Increase / decrease IR intensity by 1, within each camera's limits |
 | M | Maximum available intensity and supported/available high-power mode |
 | H | Toggle high power on capable selected cameras |
+| [ / ] | Decrease / increase corner motion tolerance by 0.5 pixels |
+| B / N | Decrease / increase maximum corner outlier by 1 pixel |
+| J / L | Decrease / increase stable time by 0.1 seconds |
+| U / O | Decrease / increase capture countdown by 0.5 seconds |
 | Space | Pause / resume automatic board capture |
+| C | Capture now, skipping the motion wait and countdown |
 | Q | Finish capture and attempt calibration with sufficient observations |
 | Esc or close | Cancel without replacing the saved calibration |
 
@@ -161,6 +166,38 @@ the target cameras and requested values; acquisition pauses briefly after a
 change to avoid collecting frames from before that change. A failed setting is
 reported in the preview. With PyQt5 unavailable, an OpenCV fallback uses W/S and
 Shift+W/S for exposure and displays those keys in its footer.
+
+The Qt preview keeps camera images beside a resizable, scrollable control panel so
+small screens and larger text do not collapse the video area. Controls and keyboard
+instructions remain accessible by scrolling.
+
+The Qt preview also has **Corner motion**, **Max outlier**, **Stable**, and
+**Countdown** controls. Changes restart the wait; settings apply to this run.
+Defaults are 5 pixels, 20 pixels, 0.1 seconds, and 0.5 seconds respectively.
+Automatic capture can start after about 0.6 seconds of stable detections;
+actual speed also depends on detection and storage time. For immediate capture,
+click **Capture now (C)** or press **C**. This also works while auto-capture is
+paused. It skips only motion checks and the countdown: board detection, finite
+corners, fresh/new camera frames and pair receipt-time checks still apply.
+Motion is the lower empirical 90th percentile of matched-corner displacement
+from the reference pose, allowing isolated detection jitter. The maximum-outlier
+limit still rejects large individual jumps. At least six shared corners are
+required. The reference stays fixed while steady, so gradual drift cannot evade
+the check by moving only a little between consecutive frames.
+
+The preview reports each selected camera's shared-corner count, measured P90
+and maximum displacement alongside their limits, stability progress, reset
+reason, and capture countdown. If a stationary board repeatedly resets, check
+these readings and image contrast before increasing tolerances. OptiTrack
+calibration now starts with the tracking exposure default (50 SDK units); use
+the existing exposure and IR controls to avoid dark or saturated board images.
+Keep the board still during each capture, then vary its position and angle
+between captures.
+
+Capture tuning does not change final acceptance limits: maximum held-out view
+reprojection error 1.5 pixels, reconstructed board shape RMS 2 mm, absolute scale
+error 2%, and planarity RMS 1 mm. These checks do not guarantee accuracy at every
+location in the capture volume; validate against known distances in your workspace.
 
 For the estimator accuracy audit and equal-priority hand/whole-body roadmap, see
 [the MMPose comparison](mmpose-comparison.md).

@@ -113,7 +113,7 @@ def board_results(offset=0., reverse=False):
 
 
 def test_capture_gate_waits_for_still_board_and_matches_corner_ids():
-    gate = capture.BoardCaptureGate()
+    gate = capture.BoardCaptureGate(stable_seconds=.5, max_motion_px=2., max_outlier_px=8.)
     assert not gate.check(board_results(), 10.)[0]
     assert not gate.check(board_results(5.), 10.3)[0]  # Moving board resets anchor.
     assert not gate.check(board_results(5., reverse=True), 10.6)[0]
@@ -123,7 +123,7 @@ def test_capture_gate_waits_for_still_board_and_matches_corner_ids():
 
 
 def test_capture_gate_rejects_stale_skewed_and_duplicate_frames():
-    gate = capture.BoardCaptureGate()
+    gate = capture.BoardCaptureGate(stable_seconds=.5, max_motion_px=2., max_outlier_px=8.)
     result = board_results()
     assert not gate.check(result, 10., [9.5]*4)[0]
     assert not gate.check(result, 10., [9.9, 10., 10., 10.])[0]
@@ -132,6 +132,54 @@ def test_capture_gate_rejects_stale_skewed_and_duplicate_frames():
     assert not gate.check(result, 10.3, [10.3]*4)[0]
     assert gate.check(result, 10.6, [10.6]*4)[0]
     assert not gate.check(result, 10.7, [float("nan")]*4)[0]
+
+
+def test_stationary_board_tolerates_one_noisy_corner_but_rejects_large_outlier():
+    gate = capture.BoardCaptureGate(stable_seconds=.5, max_motion_px=2., max_outlier_px=8.)
+    gate.check(board_results(), 10.)
+    noisy = board_results()
+    noisy[0][1][0][0, 0, 0] += 4.
+    ready, message = gate.check(noisy, 10.6, camera_ids=[2, 3, 4, 5])
+    assert ready
+    assert 'C2: 6 corners, P90 0.00/2 px, max 4.00/8 px' in message
+    noisy[0][1][0][0, 0, 0] += 5.
+    ready, message = gate.check(noisy, 10.7)
+    assert not ready and 'timer restarted' in message
+
+
+def test_slow_board_drift_is_compared_to_reference_not_previous_frame():
+    gate = capture.BoardCaptureGate(stable_seconds=1., max_motion_px=2.)
+    gate.check(board_results(), 10.)
+    assert not gate.check(board_results(1.), 10.3)[0]
+    ready, message = gate.check(board_results(2.), 10.6)
+    assert not ready and 'timer restarted' in message
+    assert not gate.check(board_results(2.), 11.)[0]
+    assert gate.check(board_results(2.), 11.7)[0]
+
+
+def test_motion_tolerance_is_adjustable_without_disabling_other_gates():
+    gate = capture.BoardCaptureGate(max_motion_px=3.)
+    gate.check(board_results(), 10.)
+    assert gate.check(board_results(1.5), 10.6)[0]
+    assert not gate.check(board_results(), 11., [10.]*4)[0]
+
+
+def test_fast_defaults_accept_stationary_board_without_long_hold():
+    gate = capture.BoardCaptureGate()
+    assert not gate.check(board_results(), 10.)[0]
+    assert gate.check(board_results(2.), 10.11)[0]
+
+
+def test_manual_capture_skips_motion_but_requires_valid_new_frames():
+    gate = capture.BoardCaptureGate()
+    assert gate.check(board_results(), 10., [10.]*4, bypass_motion=True)[0]
+    assert not gate.check(board_results(), 10.1, [10.]*4, bypass_motion=True)[0]
+    assert not gate.check(board_results(), 11., [10.]*4, bypass_motion=True)[0]
+    assert not gate.check([(False, (None, None))], 11., bypass_motion=True)[0]
+    assert gate.check(board_results(100.), 11., [11.]*4, bypass_motion=True)[0]
+    invalid = board_results()
+    invalid[0][1][0][0, 0, 0] = float('nan')
+    assert not gate.check(invalid, 12., [12.]*4, bypass_motion=True)[0]
 
 
 def test_cli_forwards_candidate_flag(monkeypatch):

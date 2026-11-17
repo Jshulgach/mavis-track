@@ -6,7 +6,7 @@ from ._illumination_controls import IlluminationControls
 
 class CaptureCountdown:
     """Require a full visible countdown before accepting a new frame batch."""
-    def __init__(self, seconds=3.0):
+    def __init__(self, seconds=0.5):
         self.seconds = seconds
         self.deadline = None
         self.waiting_message = 'Waiting for all cameras — countdown resets when paused or board visibility is lost'
@@ -36,6 +36,8 @@ class CalibrationControls:
         'I/K: IR intensity   M: max available light   H: high power',
         'Space: pause/resume auto-capture   Q: finish capture   Esc: cancel',
         'Hold board still for each capture; change angle/position between captures.',
+        '[/]: motion tolerance   B/N: max outlier   J/L: stable time   U/O: countdown',
+        'C: capture now (skip motion wait; board and fresh frames still required)',
     )
 
     def __init__(self, manager, initial_exposure=10):
@@ -49,6 +51,10 @@ class CalibrationControls:
         self.last_error = ''
         self.countdown = CaptureCountdown()
         self.capture_message = ''
+        self.motion_px = 5.0
+        self.outlier_px = 20.0
+        self.stable_seconds = 0.1
+        self.capture_now = False
         self.lighting = IlluminationControls(manager, self._lighting_changed)
 
     @property
@@ -60,7 +66,15 @@ class CalibrationControls:
         return not self.paused and time.monotonic()-self.last_change >= .35
 
     def handle_key(self, key, shift=False):
-        if key in ('up', 'down'):
+        tuning = {'[': ('motion_px', -.5), ']': ('motion_px', .5),
+                  'j': ('stable_seconds', -.1), 'l': ('stable_seconds', .1),
+                  'u': ('countdown_seconds', -.5), 'o': ('countdown_seconds', .5),
+                  'b': ('outlier_px', -1.), 'n': ('outlier_px', 1.)}
+        if key in tuning:
+            name, delta = tuning[key]
+            value = self.countdown.seconds if name == 'countdown_seconds' else getattr(self, name)
+            self.set_capture_setting(name, value + delta)
+        elif key in ('up', 'down'):
             step = 10 if shift else 1
             self.adjust(step if key == 'up' else -step)
         elif key in ('i','k','m','h'):
@@ -75,6 +89,8 @@ class CalibrationControls:
         elif key == 'space':
             self.paused = not self.paused
             self.countdown.reset()
+        elif key == 'c':
+            self.capture_now = True
         elif key == 'q':
             self.finished = True
         elif key == 'escape':
@@ -82,6 +98,17 @@ class CalibrationControls:
         else:
             return False
         return True
+
+    def set_capture_setting(self, name, value):
+        limits = {'motion_px': (.5, 10.), 'outlier_px': (1., 30.),
+                  'stable_seconds': (.1, 3.), 'countdown_seconds': (.5, 10.)}
+        low, high = limits[name]
+        value = round(max(low, min(high, value)), 2)
+        if name == 'countdown_seconds':
+            self.countdown.seconds = value
+        else:
+            setattr(self, name, value)
+        self._lighting_changed()
 
     def _lighting_changed(self):
         self.last_change = time.monotonic()
@@ -120,7 +147,9 @@ class CalibrationControls:
         if self.paused:
             return 'PAUSED — Space to start a new countdown'
         if self.capture_message:
-            return self.capture_message
+            suffix = (' | ' + self.countdown.text(time.monotonic())
+                      if self.countdown.deadline is not None else '')
+            return self.capture_message + suffix
         return self.countdown.text(time.monotonic())
 
     def description(self):

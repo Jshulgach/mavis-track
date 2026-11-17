@@ -17,12 +17,14 @@ from handtrack.processing._calibration_solver import (
 
 # Populated from the explicitly selected backend by _load_backend.
 CALIBRATION_FILE: str | None = None
+CAMERA_EXPOSURE: float | None = None
 CHARUCO_SQUARE_LENGTH: float | None = None
 CHARUCO_MARKER_LENGTH: float | None = None
 
 _CONFIG_NAMES = ("ARUCO_DICT", "CALIBRATION_DIR", "CALIBRATION_FILE",
                  "CHARUCO_MARKER_LENGTH", "CHARUCO_SQUARE_LENGTH",
-                 "CHARUCO_SQUARES_X", "CHARUCO_SQUARES_Y", "NUM_CALIBRATION_IMAGES")
+                 "CHARUCO_SQUARES_X", "CHARUCO_SQUARES_Y", "NUM_CALIBRATION_IMAGES",
+                 "CAMERA_EXPOSURE")
 MAX_HELDOUT_REPROJECTION_ERROR = 1.5
 _intrinsic_results = []
 _stereo_results = []
@@ -268,8 +270,10 @@ def main(backend):
         save_calibration(*args, **kwargs)
         saved = True
     replacements = {"CameraManager": create_manager, "calibrate_intrinsics": solve_intrinsics,
-                    "calibrate_stereo_pairs": calibrate_stereo_pairs, "save_calibration": publish}
-    previous = {name: getattr(module, name) for name in replacements}
+                    "calibrate_stereo_pairs": calibrate_stereo_pairs, "save_calibration": publish,
+                    "CAMERA_EXPOSURE": CAMERA_EXPOSURE}
+    missing = object()
+    previous = {name: getattr(module, name, missing) for name in replacements}
     for name, value in replacements.items():
         setattr(module, name, value)
     try:
@@ -280,6 +284,9 @@ def main(backend):
         return 1
     finally:
         for name, value in previous.items():
-            setattr(module, name, value)
+            if value is missing:
+                delattr(module, name)
+            else:
+                setattr(module, name, value)
         for manager in managers:
             manager.stop_all()
