@@ -30,6 +30,13 @@ triangulation. To inspect the last candidate (including files from older version
 Inspection reports failed status for a rejected candidate; it never publishes it.
 The failure reasons and thresholds are saved with new candidates.
 
+Stereo fitting preserves each camera's standard or extended distortion model
+(rational, thin-prism or tilted), including pairs with different model lengths.
+The fitted intrinsics stay fixed during alignment. If a previous calibration used
+an extended lens model, replay the saved observations or recalibrate with the fix
+to recompute its stereo poses; existing calibration files are not rewritten
+automatically.
+
 Calibration count, source indices, image sizes, and matrices are checked when loaded.
 Legacy files lacking identity or size metadata produce explicit warnings.
 
