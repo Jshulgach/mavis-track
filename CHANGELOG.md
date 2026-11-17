@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Recover calibration capture tuning, manual capture and corner-motion diagnostics; keep small-screen video visible with scrollable controls and use the configured backend exposure at startup.
+
 - Add offline replay-calibration with --latest discovery in the configured
   backend calibration directory. Skip incomplete/corrupt observations, report
   missing files clearly, and prevent output/candidate paths from overwriting

@@ -1,11 +1,14 @@
 """Keyboard exposure and calibration capture controls must preserve safe publication."""
 from types import SimpleNamespace
-import threading
 
 import numpy as np
 import pytest
-from handtrack.applications._calibration_preview import CalibrationControls, CaptureCountdown
+
 from handtrack.applications import _calibration_capture as capture
+from handtrack.applications._calibration_preview import (
+    CalibrationControls,
+    CaptureCountdown,
+)
 
 
 class ExposureManager:
@@ -15,7 +18,7 @@ class ExposureManager:
 
 
 def test_countdown_requires_new_frames_and_restarts_after_visibility_loss():
-    timer=CaptureCountdown()
+    timer=CaptureCountdown(seconds=3.)
     timer.update(10.,True)
     assert '3.0 s' in timer.text(10.)
     assert '1.0 s' in timer.text(12.)
@@ -43,6 +46,30 @@ def test_pause_and_exposure_reset_countdown():
     controls.countdown.update(30.,True)
     controls._lighting_changed()
     assert controls.countdown.deadline is None
+
+
+def test_capture_tuning_resets_countdown_and_is_bounded():
+    controls = CalibrationControls(ExposureManager())
+    for key, name, expected in [(']', 'motion_px', 5.5), ('n', 'outlier_px', 21.),
+                                ('l', 'stable_seconds', .2), ('u', 'countdown_seconds', .5)]:
+        controls.countdown.update(10., True)
+        assert controls.handle_key(key)
+        actual = controls.countdown.seconds if name == 'countdown_seconds' else getattr(controls, name)
+        assert actual == expected
+        assert controls.countdown.deadline is None
+        assert not controls.capture_ready
+    controls.set_capture_setting('motion_px', -100.)
+    assert controls.motion_px == .5
+    controls.set_capture_setting('countdown_seconds', 100.)
+    assert controls.countdown.seconds == 10.
+
+
+def test_diagnostics_do_not_hide_countdown():
+    controls = CalibrationControls(ExposureManager())
+    controls.capture_message = 'Board steady | C0: P90 0.5/2 px'
+    controls.countdown.update(capture.time.monotonic(), True)
+    assert 'Board steady' in controls.countdown_text()
+    assert 'Next capture in' in controls.countdown_text()
 
 
 def test_keyboard_exposure_targets_and_limits(monkeypatch):
@@ -82,7 +109,8 @@ def test_exposure_failure_keeps_prior_value_and_reports_camera():
 
 
 @pytest.mark.parametrize('cancel_phase',[None,'intrinsics','alignment'])
-def test_staged_capture_preserves_previous_until_alignment_succeeds(monkeypatch,tmp_path,cancel_phase):
+@pytest.mark.parametrize('capture_mode', ['auto', 'manual'])
+def test_staged_capture_preserves_previous_until_alignment_succeeds(monkeypatch,tmp_path,cancel_phase,capture_mode):
     should_save=cancel_phase is None
     published=tmp_path/'calibration.npz'
     published.write_bytes(b'previous validated result')
@@ -99,9 +127,15 @@ def test_staged_capture_preserves_previous_until_alignment_succeeds(monkeypatch,
         def stop_all(self):self.stopped=True
     manager=Manager()
     class Preview:
-        def __init__(self):self.controls=CalibrationControls(manager)
+        def __init__(self):
+            self.controls=CalibrationControls(manager)
+            if capture_mode == 'manual':
+                self.controls.stable_seconds = 100000.
+                self.controls.paused = True
         def show_frames(self,frames,status):
-            if self.controls.paused:
+            if capture_mode == 'manual':
+                self.controls.handle_key('c')
+            if self.controls.paused and capture_mode != 'manual':
                 self.controls.handle_key('space')
             if ((cancel_phase=='intrinsics' and 'intrinsics: 10/' in status)
                     or (cancel_phase=='alignment' and '0-1: 10/' in status)):
@@ -173,9 +207,10 @@ def test_detection_error_releases_cameras_without_solving(monkeypatch,tmp_path):
 
 
 def test_calibration_window_routes_real_key_events_without_camera_hardware(monkeypatch):
-    from PyQt5.QtCore import Qt,QEvent
+    from PyQt5.QtCore import QEvent, Qt
     from PyQt5.QtGui import QKeyEvent
     from PyQt5.QtWidgets import QApplication
+
     from handtrack.applications._calibration_qt import CalibrationPreview
     manager=ExposureManager()
     controls=CalibrationControls(manager)
@@ -188,6 +223,11 @@ def test_calibration_window_routes_real_key_events_without_camera_hardware(monke
         controls.countdown.update(capture.time.monotonic(),True)
         window.show_frames([np.zeros((80,100,3),np.uint8)]*4,'Board visible')
         assert 'Next capture in' in window.countdown.text()
+        window.capture_settings['motion_px'].setValue(3.)
+        assert controls.motion_px == 3.
+        assert controls.countdown.deadline is None
+        window.capture_now.click()
+        assert controls.capture_now
         assert window.font().pointSizeF()>=11
         assert 'Up/Down' in window.help.text() and 'Esc' in window.help.text()
         key(Qt.Key_3,'3')
@@ -202,5 +242,37 @@ def test_calibration_window_routes_real_key_events_without_camera_hardware(monke
         key(Qt.Key_Escape)
         assert controls.cancelled
         assert all(label.pixmap() is not None for label in window.labels)
+    finally:
+        window.shutdown()
+
+
+@pytest.mark.parametrize("size", [(640, 360), (800, 600), (1280, 720)])
+@pytest.mark.parametrize("text_percent", [100, 180])
+def test_calibration_controls_scroll_without_collapsing_video(size, text_percent):
+    pytest.importorskip("PyQt5")
+    from PyQt5.QtWidgets import QApplication
+
+    from handtrack.applications._calibration_qt import CalibrationPreview
+    app = QApplication.instance() or QApplication([])
+    controls = CalibrationControls(ExposureManager())
+    controls.capture_message = "Hold board still: " + "C0: 20 corners, P90 1/5 px, max 2/20 px | " * 4
+    window = CalibrationPreview(controls, "Small screen calibration")
+    try:
+        window.resize(*size)
+        window.text_size.setValue(text_percent)
+        for _ in range(3):
+            window.show_frames([np.zeros((80, 100, 3), np.uint8)] * 4, "Show the calibration board")
+        assert window.width() <= size[0] and window.height() <= size[1]
+        assert window.camera_grid.width() >= 160 and window.camera_grid.height() >= 120
+        assert all(label.pixmap() is not None and not label.pixmap().isNull() for label in window.labels)
+        scroll = window.controls_scroll.verticalScrollBar()
+        assert scroll.maximum() > 0
+        scroll.setValue(scroll.maximum())
+        app.processEvents()
+        assert window.help.isVisible()
+        assert window.controls_scroll.viewport().rect().intersects(
+            window.help.rect().translated(window.help.mapTo(window.controls_scroll.viewport(), window.help.rect().topLeft())))
+        window.capture_now.click()
+        assert controls.capture_now
     finally:
         window.shutdown()

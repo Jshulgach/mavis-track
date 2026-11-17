@@ -39,24 +39,31 @@ def _collect(module, manager, preview, executor, detectors, session, checkpoint)
         display = [module.annotate_frame(frame, index, found, data)
                    for index, (frame, (found, data)) in enumerate(zip(frames, results))]
         target = session.choose_target(results)
+        manual = controls.capture_now
+        controls.capture_now = False
         if target != session.active_target:
             countdown.reset()
             gate.reset()
             session.active_target = target
-        ready = (target is not None and controls.capture_ready
+        ready = (target is not None and (controls.capture_ready or
+                 (manual and time.monotonic() - controls.last_change >= .35))
                  and batch_started >= controls.last_change)
         guidance = ''
         if ready:
+            gate.stable_seconds = controls.stable_seconds
+            gate.max_motion_px = controls.motion_px
+            gate.max_outlier_px = controls.outlier_px
             selected_stamps = [stamps[camera] for camera in target] if stamps is not None else None
             steady, guidance = gate.check(
                 [results[camera] for camera in target],
-                snapshot_now if stamps is not None else time.monotonic(), selected_stamps)
+                snapshot_now if stamps is not None else time.monotonic(), selected_stamps,
+                camera_ids=target, bypass_motion=manual)
             ready = steady
         else:
             gate.reset()
-        controls.capture_message = guidance
+        controls.capture_message = guidance or ('Paused' if controls.paused else countdown.waiting_message)
         countdown.update(time.monotonic(), ready)
-        captured = ready and countdown.due(batch_started) and not controls.finished
+        captured = ready and (manual or countdown.due(batch_started)) and not controls.finished
         if captured:
             session.capture(target, results)
             countdown.reset()
@@ -102,10 +109,11 @@ class BoardCaptureGate:
     establish hardware exposure synchronization.
     """
 
-    def __init__(self, stable_seconds=.5, max_motion_px=1.0, max_skew=.05):
+    def __init__(self, stable_seconds=.1, max_motion_px=5.0, max_skew=.05, max_outlier_px=20.0):
         self.stable_seconds = stable_seconds
         self.max_motion_px = max_motion_px
         self.max_skew = max_skew
+        self.max_outlier_px = max_outlier_px
         self.reset()
 
     def reset(self):
@@ -113,7 +121,7 @@ class BoardCaptureGate:
         self.since = None
         self.last_stamps = None
 
-    def check(self, results, now, stamps=None):
+    def check(self, results, now, stamps=None, *, camera_ids=None, bypass_motion=False):
         if not all(found for found, _ in results):
             self.reset()
             return False, "Board must be visible in every camera"
@@ -129,18 +137,46 @@ class BoardCaptureGate:
             self.last_stamps = tuple(stamps)
         current = [(np.asarray(corners).reshape(-1, 2).copy(),
                     np.asarray(ids).reshape(-1).copy()) for _, (corners, ids) in results]
+        if any(len(ids) < 6 or len(points) != len(ids) or not np.isfinite(points).all()
+               for points, ids in current):
+            self.reset()
+            return False, 'Need at least 6 finite detected corners per selected camera'
+        if bypass_motion:
+            return True, 'Manual capture: motion wait skipped'
         still = self.anchor is not None and len(current) == len(self.anchor)
+        diagnostics = []
+        reason = 'Establishing reference pose'
         if still:
-            for (points, ids), (old_points, old_ids) in zip(current, self.anchor):
+            for camera, ((points, ids), (old_points, old_ids)) in enumerate(zip(current, self.anchor)):
+                camera = camera_ids[camera] if camera_ids is not None else camera
                 common, ii, jj = np.intersect1d(ids, old_ids, return_indices=True)
-                if (len(common) < 6 or
-                        np.max(np.linalg.norm(points[ii] - old_points[jj], axis=1)) > self.max_motion_px):
+                if len(common) < 6:
                     still = False
-                    break
+                    reason = f'Camera {camera}: only {len(common)} shared corners; need 6'
+                    continue
+                distances = np.linalg.norm(points[ii] - old_points[jj], axis=1)
+                if not np.isfinite(distances).all():
+                    still = False
+                    reason = f'Camera {camera}: invalid corner coordinates'
+                    continue
+                # Lower empirical percentile tolerates one jittering corner even
+                # in a small six-corner detection; large outliers remain bounded.
+                motion = float(np.percentile(distances, 90, method='lower'))
+                maximum = float(np.max(distances))
+                diagnostics.append(f'C{camera}: {len(common)} corners, P90 {motion:.2f}/{self.max_motion_px:g} px, '
+                                   f'max {maximum:.2f}/{self.max_outlier_px:g} px')
+                if motion > self.max_motion_px or maximum > self.max_outlier_px:
+                    still = False
+                    reason = f'Camera {camera}: corner displacement exceeded limit; timer restarted'
         if not still:
             self.anchor, self.since = current, now
         ready = now - self.since >= self.stable_seconds
-        return ready, ("Board steady" if ready else "Hold board still for 0.5 s")
+        elapsed = now - self.since
+        state = ('Board steady' if ready else
+                 f'Hold board still: {elapsed:.1f}/{self.stable_seconds:g} s')
+        if not still:
+            state += ' - ' + reason
+        return ready, ' | '.join([state, *diagnostics])
 
 
 def _capture_snapshots(manager):
@@ -162,15 +198,18 @@ def run_capture(module):
         if manager.num_cameras == 0:
             print('No cameras found. Exiting.')
             return
-        manager.start_all(exposure=10)
+        initial_exposure = getattr(module, 'CAMERA_EXPOSURE', 10)
+        manager.start_all(exposure=initial_exposure)
         if hasattr(manager, 'wait_ready'):
             manager.wait_ready()
         count = manager.num_cameras
         image_size = manager.get_resolution(0)
-        preview = create_calibration_preview(manager, 'OptiTrack ChArUco Calibration', 10)
+        preview = create_calibration_preview(
+            manager, 'ChArUco Calibration', initial_exposure if initial_exposure is not None else 10)
         controls = preview.controls
         controls.instructions = (*controls.instructions[:2],
-            'Space: pause/resume   Q: next camera / finish alignment (20+ captures)   Esc: cancel')
+            'Space: pause/resume   Q: next camera / finish alignment (20+ captures)   Esc: cancel',
+            *controls.instructions[3:])
         print('Calibration: Space pause/resume, Q advance when enough captures, Esc cancel.')
         print('Stage 1: individual camera intrinsics. Stage 2: overlapping camera alignment.')
         session = CalibrationSession(count, module.NUM_CALIBRATION_IMAGES)
