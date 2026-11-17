@@ -24,6 +24,22 @@ def test_nexus_packets_are_null_terminated_escaped_and_unique(monkeypatch):
         element = ET.fromstring(packet[:-1])
         assert element.tag == tag and element.find('Name').get('VALUE') == 'Reach & test'
         assert element.find('Delay').get('VALUE') == '0'
+    assert start['packet_xml'].encode() + b'\0' == sent[0][0]
+    assert ET.fromstring(start['packet_xml']).find('Notes') is not None
+
+
+def test_selected_trial_name_is_used_for_both_requests(monkeypatch):
+    received = []
+    class Socket:
+        def settimeout(self, timeout): pass
+        def sendto(self, packet, address): received.append(ET.fromstring(packet[:-1]))
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+    monkeypatch.setattr(nexus.socket, 'socket', lambda *args: Socket())
+    remote = nexus.NexusRemote('172.26.116.93')
+    remote.send('start', 'Trial004')
+    remote.send('stop', 'Trial004')
+    assert [root.find('Name').get('VALUE') for root in received] == ['Trial004', 'Trial004']
 
 
 @pytest.mark.parametrize('name', ['', '../trial', 'CON', 'trial.', 'a:b'])

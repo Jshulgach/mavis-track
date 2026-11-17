@@ -163,6 +163,9 @@ def test_gui_preview_renders_without_3d_then_enables_it_after_calibration(monkey
     monkeypatch.setattr(gui,'CALIBRATION_FILE',str(calibration))
     app=QApplication.instance() or QApplication([])
     window=gui.StereoHandTrackerGUI()
+    # This test exercises inferred hands and 3D; startup now defaults to camera-only.
+    assert not window.inference_checkbox.isChecked()
+    window.inference_checkbox.setChecked(True)
     def wait_for_frames():
         deadline=time.monotonic()+5
         while window.frame_count<2 and time.monotonic()<deadline:

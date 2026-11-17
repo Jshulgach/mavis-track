@@ -13,7 +13,7 @@ optitrack_cam, SDK_IMPORT_ERROR = load_sdk(_SRC_ROOT)
 # ==================== CAMERA SETTINGS ====================
 
 # OptiTrack Specific Settings
-CAMERA_EXPOSURE = 15  # Low exposure for maximum FPS
+CAMERA_EXPOSURE = 50  # Flex13 SDK units: microseconds (50 us = 0.05 ms).
 MJPEG_MODE = 6  # Core::MJPEGMode``
 DISPLAY_SCALE = 1.0  # Global scaling for UI
 GRID_COLS = 3  # Grid layout for visualization

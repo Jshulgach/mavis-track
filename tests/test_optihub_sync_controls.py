@@ -12,12 +12,13 @@ from unity_hand_tracking.optitrack_cam_py import multi_mjpeg
 @pytest.fixture
 def rig(monkeypatch):
     calls = []
-    values = dict(available=True, input_source=0, input_trigger=3, input_divider=1,
+    values = dict(available=True, hub_count=1, sync_mode=1, input_source=0, input_trigger=3, input_divider=1,
                   global_offset_us=0, internal_frequency_hz=50, device_name="OptiHub 2")
     def configure(preset):
         calls.append(preset)
         values["input_source"] = 2 if preset == "vicon_external_50hz" else 0
-    sdk = SimpleNamespace(get_sync_status=lambda: dict(values), configure_sync_preset=configure)
+    sdk = SimpleNamespace(get_sync_status=lambda: dict(values), configure_sync_preset=configure,
+                          configure_exposure_output=lambda: None)
     monkeypatch.setattr(multi_mjpeg, "optitrack_cam", sdk)
     manager = multi_mjpeg.CameraManager.__new__(multi_mjpeg.CameraManager)
     manager._stop_lock = threading.RLock()
@@ -29,7 +30,7 @@ def rig(monkeypatch):
     started.set()
     manager.workers = [SimpleNamespace(index=0, name="Camera 0", status="waiting for frames", error="",
                                       ready=threading.Event(), frame_timestamp=None,
-                                      capture_started=started, is_alive=lambda: True)]
+                                      capture_started=started, is_alive=lambda: True, capture_rate=lambda: 50.)]
     manager._sample_sync_status()
     return manager, sdk, calls, values
 
@@ -44,6 +45,31 @@ def test_presets_record_expectation_without_claiming_a_measured_signal(rig):
     assert not status["input_edge_recording_supported"]
     manager.configure_sync_preset("internal_50hz")
     assert calls[-1] == "internal_50hz" and manager.get_sync_status()["input_source"] == 0
+
+
+def test_recording_sync_checks_hub_configuration_and_measured_rate(rig):
+    manager, sdk, calls, values = rig
+    assert 'Apply' in manager.recording_sync_issue()
+    manager.configure_sync_preset('internal_50hz')
+    assert manager.recording_sync_issue() is None
+    manager.workers[0].capture_rate = lambda: 120.
+    assert '120.0 Hz' in manager.recording_sync_issue()
+    manager.workers[0].capture_rate = lambda: None
+    assert 'waiting' in manager.recording_sync_issue()
+    values['hub_count'] = 0
+    manager._sample_sync_status()
+    assert 'OptiHub unavailable' in manager.recording_sync_issue()
+
+
+def test_capture_rate_uses_sdk_sequence_and_rejects_stale_samples(monkeypatch):
+    from collections import deque
+    worker = multi_mjpeg.CameraWorker.__new__(multi_mjpeg.CameraWorker)
+    worker.lock = threading.Lock()
+    worker._rate_samples = deque((10+i/50, 100+i) for i in range(51))
+    monkeypatch.setattr(multi_mjpeg.time, 'perf_counter', lambda: 11.01)
+    assert worker.capture_rate() == pytest.approx(50.)
+    monkeypatch.setattr(multi_mjpeg.time, 'perf_counter', lambda: 12.)
+    assert worker.capture_rate() is None
 
 
 def test_recording_or_closed_session_prevents_mode_changes(rig):
@@ -125,6 +151,11 @@ def test_gui_requires_apply_and_blocks_changes_while_recording(monkeypatch, rig)
         assert window.nexus_network_checkbox.window() == window.sync_dialog
         assert window.trial_name_edit.window() == window
         assert not window.nexus_network_checkbox.isChecked()
+        assert window.nexus_address_edit.text() == '172.26.116.93'
+        assert window.trial_name_edit.text() == ''
+        assert window.sync_preset_combo.currentData() == 'internal_50hz'
+        assert window.record_fps.value() == 50
+        assert window.default_exposure == window.exposure_all_spin.value() == 50
         assert not window.sync_apply_btn.isEnabled()
         window.tracker = SimpleNamespace(cam_mgr=manager)
         window.is_running = True
@@ -146,5 +177,38 @@ def test_gui_requires_apply_and_blocks_changes_while_recording(monkeypatch, rig)
     finally:
         window.tracker = None
         window.is_running = False
+        window.close()
+        app.processEvents()
+
+
+def test_gui_startup_applies_internal_sync_and_exposure_output(monkeypatch, rig):
+    from PyQt5.QtWidgets import QApplication
+    from unity_hand_tracking.optitrack_cam_py import mocap_handtrack_gui as gui
+    monkeypatch.setattr(gui.StereoHandTrackerGUI, 'start_udp_broadcast', lambda self: None)
+    monkeypatch.setattr(gui.StereoHandTrackerGUI, 'stop_udp_broadcast', lambda self: None)
+    app = QApplication.instance() or QApplication([])
+    window = gui.StereoHandTrackerGUI()
+    manager, sdk, calls, values = rig
+    sdk.configure_exposure_output = lambda: calls.append('exposure_output')
+    try:
+        window.tracker = SimpleNamespace(cam_mgr=manager)
+        window._apply_startup_sync()
+        assert calls == ['internal_50hz', 'exposure_output']
+        assert 'Applied at startup' in window.sync_action_status.text()
+        def fail(): raise RuntimeError('output rejected')
+        sdk.configure_exposure_output = fail
+        window._apply_startup_sync()
+        assert 'failed' in window.sync_action_status.text()
+        window._toggle_recording()
+        assert 'output rejected' in window.record_status.text()
+        assert manager.recorder is None
+        assert window._startup_sync_pending
+        sdk.configure_exposure_output = lambda: None
+        window._sync_retry_after = 0
+        window._update_capture_controls()
+        assert not window._startup_sync_pending
+        assert window._startup_sync_error is None
+    finally:
+        window.tracker = None
         window.close()
         app.processEvents()

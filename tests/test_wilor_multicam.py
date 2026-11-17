@@ -51,6 +51,7 @@ def test_calibrated_wilor_gui_renders_mesh_and_skeleton(cameras, app, monkeypatc
         def close(self):pass
     monkeypatch.setattr(sessions,'WiLoRMultiViewTracker',Model)
     window=gui.StereoHandTrackerGUI(model='wilor')
+    window.inference_checkbox.setChecked(True)
     rendered=[]
     original_render=window.update_3d_view
     def render(raw,filtered,meshes=None,faces=None):
@@ -249,6 +250,7 @@ def test_four_live_tiles_and_controls_work_during_blocked_model_load(models, cam
     gate = threading.Event()
     model_state.load_gate = gate
     window = gui.StereoHandTrackerGUI(model="wilor", wilor_root=root)
+    window.inference_checkbox.setChecked(True)
     timer = QTimer()
     ticks = []
     timer.timeout.connect(lambda: ticks.append(1))
@@ -286,7 +288,7 @@ def test_inference_toggle_keeps_cameras_live_and_defers_model_load(models, camer
     root, state = models
     window = gui.StereoHandTrackerGUI(model="wilor", wilor_root=root)
     try:
-        window.inference_checkbox.setChecked(False)
+        assert not window.inference_checkbox.isChecked()
         window.start_tracking()
         wait_until(lambda: window._wilor_session.ready.is_set(), app)
         wait_until(lambda: len(window.video_labels) == 4 and
@@ -308,6 +310,45 @@ def test_inference_toggle_keeps_cameras_live_and_defers_model_load(models, camer
         window.inference_checkbox.setChecked(True)
         wait_until(lambda: window._wilor_session.completed_batches > batches, app)
         assert state.loads == 1
+    finally:
+        window.close()
+        wait_until(lambda: window._wilor_session is None, app)
+
+
+@pytest.mark.parametrize('inference', [False, True])
+def test_camera_preview_toggle_skips_rendering_and_keeps_capture_live(models, cameras, app, monkeypatch, inference):
+    root, state = models
+    window = gui.StereoHandTrackerGUI(model='wilor', wilor_root=root)
+    window.inference_checkbox.setChecked(inference)
+    try:
+        window.show()
+        window.start_tracking()
+        wait_until(lambda: len(window.video_labels) == 4 and
+                   all(label.pixmap() is not None for label in window.video_labels), app)
+        window.camera_preview_checkbox.setChecked(False)
+        assert window.video_grid.isHidden()
+        assert all(label.pixmap() is None for label in window.video_labels)
+        assert not window.raw_video_checkbox.isEnabled()
+        manager = cameras.managers[0]
+        count = manager.counter
+        batches = window._wilor_session.completed_batches
+        with monkeypatch.context() as patch:
+            def unexpected_render(*args):
+                raise AssertionError('Hidden preview rendered a camera image')
+            for label in window.video_labels:
+                patch.setattr(label, 'setPixmap', unexpected_render)
+            # Also directly exercise the raw display path shared with MediaPipe.
+            window._display_raw_cameras([(object(), 0)] * 4)
+            wait_until(lambda: manager.counter > count + 5, app)
+            if inference:
+                wait_until(lambda: window._wilor_session.completed_batches > batches, app)
+        assert not manager.stopped
+        assert window.inference_checkbox.isChecked() == inference
+        window.camera_preview_checkbox.setChecked(True)
+        wait_until(lambda: all(label.pixmap() is not None for label in window.video_labels), app)
+        assert not window.video_grid.isHidden()
+        if not inference:
+            assert state.loads == 0
     finally:
         window.close()
         wait_until(lambda: window._wilor_session is None, app)
@@ -337,6 +378,7 @@ def test_recording_without_inference_flushes_before_gui_closes(models, cameras, 
     monkeypatch.setattr(NexusRemote, 'send', send)
     window = gui.StereoHandTrackerGUI(model='wilor', wilor_root=root)
     window.inference_checkbox.setChecked(False)
+    window.camera_preview_checkbox.setChecked(False)
     window.trial_name_edit.setText('Reach_A')
     window.nexus_network_checkbox.setChecked(network)
     try:
@@ -376,6 +418,7 @@ def test_recording_without_inference_flushes_before_gui_closes(models, cameras, 
         manifest = json.loads((recorder.directory / 'manifest.json').read_text())
         assert manifest['complete'] and not manifest['input_edge_recording_supported']
         assert manifest['trial_name'] == 'Reach_A' and recorder.directory.name.startswith('Reach_A_')
+        assert manifest['session_metadata']['camera_preview_enabled'] is False
         assert window.record_directory_edit.text() == str(tmp_path)
         assert sent == ([('start', 'Reach_A'), ('stop', 'Reach_A')] if network else [])
         if network:
@@ -393,6 +436,7 @@ def test_matched_packet_stays_paired_and_camera_loss_clears_tile(models, cameras
     gate = threading.Event()
     model_state.infer_gate = gate
     window = gui.StereoHandTrackerGUI(model="wilor", wilor_root=root)
+    window.inference_checkbox.setChecked(True)
     try:
         window.show()
         window.start_tracking()
@@ -602,6 +646,7 @@ def test_mediapipe_wilor_switches_reopen_four_cameras_without_terminal_sdk_shutd
     monkeypatch.setattr(gui.StereoHandTrackerGUI, "start_udp_broadcast", lambda self: None)
     monkeypatch.setattr(gui.StereoHandTrackerGUI, "stop_udp_broadcast", lambda self: None)
     window = gui.StereoHandTrackerGUI(model="mediapipe", wilor_root=root)
+    window.inference_checkbox.setChecked(True)
     window._mediapipe_ready = True
     try:
         window.show()
@@ -634,6 +679,7 @@ def test_first_inference_is_not_reported_as_model_loading(models, cameras, app):
     gate = threading.Event()
     model_state.infer_gate = gate
     window = gui.StereoHandTrackerGUI(model="wilor", wilor_root=root)
+    window.inference_checkbox.setChecked(True)
     try:
         window.show()
         window.start_tracking()
@@ -659,6 +705,7 @@ def test_completed_zero_detection_batches_and_raw_display_are_explicit(models, c
     root, model_state = models
     model_state.empty = True
     window = gui.StereoHandTrackerGUI(model="wilor", wilor_root=root)
+    window.inference_checkbox.setChecked(True)
     try:
         window.show()
         window.start_tracking()
