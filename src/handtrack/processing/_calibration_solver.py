@@ -367,17 +367,31 @@ def calibrate_stereo_robust(
             f"Need at least {min_inliers + 1} stereo observations; got {count}"
         )
 
+    # OpenCV truncates supplied distortion vectors to five terms unless an
+    # extended model flag is set, even with CALIB_FIX_INTRINSIC. Preserve the
+    # mono lens model; zero-padding lets standard and extended cameras mix.
+    sizes = (np.asarray(dist_coeffs_a).size, np.asarray(dist_coeffs_b).size)
+    if any(size not in (4, 5, 8, 12, 14) for size in sizes):
+        raise ValueError("Stereo distortion vectors need 4, 5, 8, 12 or 14 coefficients")
+    stereo_flags = cv2.CALIB_FIX_INTRINSIC
+    if max(sizes) >= 8:
+        stereo_flags |= cv2.CALIB_RATIONAL_MODEL
+    if max(sizes) >= 12:
+        stereo_flags |= cv2.CALIB_THIN_PRISM_MODEL
+    if max(sizes) == 14:
+        stereo_flags |= cv2.CALIB_TILTED_MODEL
+
     def fit(indices: Sequence[int]):
         rms, _, _, _, _, rotation, translation, _, _ = cv2.stereoCalibrate(
             [object_points[i] for i in indices],
             [image_points_a[i] for i in indices],
             [image_points_b[i] for i in indices],
-            camera_matrix_a,
-            dist_coeffs_a,
-            camera_matrix_b,
-            dist_coeffs_b,
+            np.asarray(camera_matrix_a).copy(),
+            np.asarray(dist_coeffs_a).copy(),
+            np.asarray(camera_matrix_b).copy(),
+            np.asarray(dist_coeffs_b).copy(),
             image_size,
-            flags=cv2.CALIB_FIX_INTRINSIC,
+            flags=stereo_flags,
         )
         return float(rms), rotation, translation
 

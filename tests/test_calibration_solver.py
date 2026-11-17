@@ -1,9 +1,11 @@
 import cv2
 import numpy as np
+import pytest
 
 from handtrack.processing._calibration_solver import (
     StereoResult,
     calibrate_intrinsics_robust,
+    calibrate_stereo_robust,
     point_rmse,
     robust_error_threshold,
     solve_camera_pose_graph,
@@ -210,3 +212,45 @@ def test_heldout_board_reconstruction_recovers_shape_scale_and_plane():
     assert result.shape_rms_mm < 0.01
     assert result.scale_error_percent < 0.01
     assert result.planarity_rms_mm < 0.01
+
+
+@pytest.mark.parametrize("coefficients", [8, 12, 14])
+@pytest.mark.parametrize("mixed_models", [False, True])
+def test_stereo_preserves_extended_lens_models_and_fixed_intrinsics(coefficients, mixed_models):
+    # Equal radial numerator/denominator terms cancel exactly. A mono fit of
+    # an undistorted camera can legitimately return this rational representation.
+    # Dropping denominator terms silently changes the lens during stereo fitting.
+    objects = np.zeros((30, 3), np.float32)
+    objects[:, :2] = np.mgrid[0:6, 0:5].T.reshape(-1, 2)*.04
+    matrix = np.array([[900., 0, 640], [0, 890, 512], [0, 0, 1.]])
+    distortion = np.zeros(coefficients)
+    distortion[[0, 1, 4]] = [.6, .05, .002]
+    distortion[5:8] = [.6, .05, .002]
+    if coefficients >= 12:
+        distortion[8:12] = [.002, -.001, .001, .0002]
+    if coefficients == 14:
+        distortion[12:14] = [.01, -.015]
+    distortion_a = np.zeros(5) if mixed_models else distortion.copy()
+    expected_rotation, _ = cv2.Rodrigues(np.array([.01, -.03, .005]))
+    expected_translation = np.array([[-.2], [.005], [.01]])
+    obj, first, second = [], [], []
+    for index in range(20):
+        rvec = np.array([.3*np.sin(index*.3), .3*np.cos(index*.4), .1*np.sin(index*.2)])
+        position = np.array([-.1+.1*np.sin(index*.5), -.08+.1*np.cos(index*.3), .8+.2*(index%5)/4])
+        rotation, _ = cv2.Rodrigues(rvec)
+        second_rvec, _ = cv2.Rodrigues(expected_rotation@rotation)
+        second_position = expected_rotation@position.reshape(3, 1)+expected_translation
+        image_a, _ = cv2.projectPoints(objects, rvec, position, matrix, distortion_a)
+        image_b, _ = cv2.projectPoints(objects, second_rvec, second_position, matrix, distortion)
+        obj.append(objects.copy())
+        first.append(image_a.astype(np.float32))
+        second.append(image_b.astype(np.float32))
+    before = [array.copy() for array in (matrix, distortion_a, distortion)]
+    result = calibrate_stereo_robust(0, 1, obj, first, second, matrix, distortion_a,
+                                     matrix, distortion, (1280, 1024), min_inliers=8)
+    np.testing.assert_allclose(result.translation, expected_translation, atol=1e-4)
+    np.testing.assert_allclose(result.rotation, expected_rotation, atol=1e-4)
+    assert result.rms < .001
+    assert np.max(result.heldout_errors) < .001
+    for actual, original in zip((matrix, distortion_a, distortion), before):
+        np.testing.assert_array_equal(actual, original)

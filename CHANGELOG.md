@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Preserve rational, thin-prism and tilted distortion models during fixed-intrinsic
+  stereo fitting. OpenCV otherwise truncates extended mono calibration vectors
+  to five coefficients, causing inaccurate extrinsics and intermittent platform
+  failures. Support mixed lens models and protect caller-owned intrinsic arrays.
+
 - Rename the GitHub repository to Jshulgach/mavis-track and update canonical
   repository, documentation, package metadata and native-binding download URLs.
 
