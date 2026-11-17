@@ -14,7 +14,7 @@ import urllib.error
 import urllib.request
 import zipfile
 
-BUNDLE_URL = 'https://github.com/Jshulgach/Hand-Landmark-Tracker/releases/download/optitrack-binding-sync-v1/optitrack-binding-cp311-win_amd64.zip'
+BUNDLE_URL = 'https://github.com/Jshulgach/mavis-track/releases/download/optitrack-binding-sync-v1/optitrack-binding-cp311-win_amd64.zip'
 BUNDLE_SHA256 = '8be350efa5b8f673c0227f249513e61d76184dfffd90d9d5e36b9d4dd5ac3068'
 SOURCE_REVISION = '4c8a4e18b6f4dc8d5df803307a7760b77a351afe'
 SDK_REVISION = 'd0981e46b7f1838f7ac3af2ebc4f935ba763be6d'

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Rename the GitHub repository to Jshulgach/mavis-track and update canonical
+  repository, documentation, package metadata and native-binding download URLs.
+
 - Pin the prebuilt Windows/Python 3.11 sync binding, verify frame-timing and
   OptiHub control APIs during upgrade, and report capabilities in doctor.
   Document compiler-free upgrades and hardware timing limitations.

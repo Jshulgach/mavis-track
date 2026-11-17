@@ -126,7 +126,7 @@ and records the installed build hash. Runtime recovery will not downgrade an
 identified local v2 build. The CameraLibrary DLL is still checked against the
 original pinned hash.
 
-A small [prebuilt sync-capable binding](https://github.com/Jshulgach/Hand-Landmark-Tracker/releases/tag/optitrack-binding-sync-v1)
+A small [prebuilt sync-capable binding](https://github.com/Jshulgach/mavis-track/releases/tag/optitrack-binding-sync-v1)
 is available separately for Windows/Python 3.11 x64. Close MAVIS, activate its
 environment, and run:
 

@@ -441,6 +441,6 @@ If you use these examples in your research, please cite:
   author = {Shulgach, Jonathan},
   title = {Hand Landmark Tracker},
   year = {2025},
-  url = {https://github.com/Jshulgach/Hand-Landmark-Tracker}
+  url = {https://github.com/Jshulgach/mavis-track}
 }
 ```

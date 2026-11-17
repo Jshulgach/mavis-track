@@ -150,7 +150,7 @@ CameraLibrary DLL and USB drivers remain prerequisites.
 To build from source instead:
 
 Close MAVIS and use the Python 3.11 x64 build environment described in
-[the local SDK guide](https://github.com/Jshulgach/Hand-Landmark-Tracker/blob/main/external/README.md#illumination-binding-upgrade), with
+[the local SDK guide](https://github.com/Jshulgach/mavis-track/blob/main/external/README.md#illumination-binding-upgrade), with
 Visual Studio 2022 C++ tools, CMake and pybind11 installed:
 
 ```powershell
