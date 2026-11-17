@@ -1,5 +1,22 @@
 # Releases
 
+## 0.2.0
+
+The current source version is **0.2.0**, with changes documented in
+[the changelog](https://github.com/Jshulgach/mavis-track/blob/main/CHANGELOG.md).
+
+- Add synchronized hand/body tracking, bounded long-session recording and shared-model
+  WiLoR inference across multiple camera views.
+- Improve OptiTrack recording and synchronization controls, model switching and
+  startup diagnostics.
+- Add offline calibration replay, preserve extended lens models during stereo fitting,
+  and provide capture tuning, manual capture and a small-screen calibration layout.
+
+The version update prepares the source and distribution metadata. Publishing
+TestPyPI/PyPI packages and a GitHub release are separate release steps described below.
+WiLoR still requires its separate environment and licensed MANO assets. Vendor SDKs
+and USB drivers are installed separately; physical accuracy and timing require rig validation.
+
 ## One-Time Repository Setup
 
 Version 0.1.0 is published on PyPI and TestPyPI. Fresh Windows installs of

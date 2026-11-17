@@ -1,6 +1,8 @@
 # Installation
 
-MAVIS 0.1.0 is available on [PyPI](https://pypi.org/project/mavis-track/).
+The current MAVIS source version is **0.2.0**. Published packages are available on
+[PyPI](https://pypi.org/project/mavis-track/). Updating the source version does not
+publish a new package; install from the checkout below to use the current source.
 Python 3.10–3.12, 64-bit, is required; Python 3.13 and newer
 are excluded because the pinned MediaPipe release does not provide those wheels.
 
