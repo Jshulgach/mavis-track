@@ -65,6 +65,7 @@ with os.add_dll_directory(sys.argv[2]):
     sdk=importlib.import_module('optitrack_cam')
     assert sdk.BINDING_API_VERSION == 2
     assert sdk.CAMERA_RECORDING_API_VERSION == 1
+    assert sdk.PARALLEL_RASTERIZE_API_VERSION == 1
     assert callable(sdk.get_sync_status)
     assert sdk.OPTIHUB_SYNC_CONTROL_API_VERSION == 1
     assert callable(sdk.configure_sync_preset)
@@ -100,6 +101,9 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--restore-sdk',action='store_true',help='recover build headers/library from local Git history')
     parser.add_argument('--output',type=Path,default=Path('.cache/optitrack-binding'))
+    parser.add_argument('--generator', default='Visual Studio 17 2022',
+                        choices=['Visual Studio 17 2022', 'Visual Studio 18 2026'],
+                        help='Visual Studio generator; VS 2026 requires CMake 4.2 or newer')
     parser.add_argument('--install',action='store_true',help='install locally after native import verification')
     parser.add_argument('--bundle',action='store_true',help='create a local binding-only ZIP; never uploads it')
     args=parser.parse_args(argv)
@@ -115,7 +119,7 @@ def main(argv=None):
     pybind_dir=subprocess.check_output([sys.executable,'-m','pybind11','--cmakedir'],text=True).strip()
     build=output/'build'
     native=output/'runtime'
-    subprocess.run(['cmake','-S',str(source),'-B',str(build),'-G','Visual Studio 17 2022','-A','x64',
+    subprocess.run(['cmake','-S',str(source),'-B',str(build),'-G',args.generator,'-A','x64',
         f'-DCAMERA_SDK_DIR={sdk}',f'-DCAMERA_BINDING_OUTPUT_DIR={native}',
         f'-DPython3_EXECUTABLE={sys.executable}',f'-Dpybind11_DIR={pybind_dir}'],check=True)
     subprocess.run(['cmake','--build',str(build),'--config','Release','--parallel','2'],check=True)

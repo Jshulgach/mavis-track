@@ -7,19 +7,22 @@ trial files; alignment reports and synchronized review run after capture.
 
 ## Configure the hardware once
 
-1. Confirm Nexus's **Actual Frame Rate** is 50 Hz. Configure the chosen Lock Lab
-   GPO output with `DV_Normal.gpo`; connect it to **OptiHub External Sync In**.
-   Confirm the actual output is active and produces 50 pulses/second. The program
-   starts on `MXDVStart`, which is distinct from the `StartCapture` event used by
-   `Duration.gpo`; do not assume selecting the program starts a continuous signal.
-2. In MAVIS setup, apply **Vicon Nexus — external 50 Hz**. This selects external
-   rising-edge input, divider 1 and zero added offset. Internal 50 Hz remains an
-   explicit recovery option when there are no Vicon pulses.
-3. If recording exposure evidence in Nexus, connect **OptiHub External Sync Out**
-   to a suitable Lock Lab analog input and use **Enable exposure timing on
-   External Sync Out** in setup. Check voltage range and actual pulse widths
-   with a scope. Select a sampling rate that resolves the shortest pulse;
-   camera frame rate alone does not determine a sufficient analog rate.
+1. MAVIS camera startup defaults to **Internal ? 50 Hz (free run)** and
+   active-high exposure timing on **OptiHub External Sync Out**. The selected
+   preset is applied at each camera start; subsequent changes use **Apply Sync
+   Mode** with recording stopped. Check setup for any application error.
+2. For this outward-sync setup, connect **OptiHub External Sync Out** to a
+   suitable Lock Lab analog input if recording exposure evidence in Nexus.
+   Check voltage range and pulse widths with a scope. This output marks camera
+   exposures; Nexus recording boundaries use the separate network requests.
+3. If Vicon should instead drive camera exposures, select and apply **Vicon
+   Nexus ? external 50 Hz**. Connect a verified 50 Hz Lock Lab GPO signal to
+   **OptiHub External Sync In**. `DV_Normal.gpo` starts on `MXDVStart`, distinct
+   from the `StartCapture` event used by `Duration.gpo`; verify that pulses are
+   actually present before recording.
+
+Flex13 exposure defaults to SDK value **50 microseconds (0.05 milliseconds)**,
+not 50 ms. A 50 Hz frame interval is 20 ms.
 
 The SDK readback checks configuration, not electrical lock. Install the current prebuilt sync-capable binding or rebuild the native extension
 for the new controls; import tests and simulated SDK tests do not
@@ -68,7 +71,10 @@ controller leaves recording running. Camera readiness and recording-file health
 must still be checked in MAVIS; a reply confirms MAVIS command handling, not
 Nexus capture or hardware synchronization.
 
-Enter the same trial name used by Nexus and select a video output parent folder.
+Enter the intended unique trial name (for example `Trial004`) and select a video
+output parent folder. The field starts empty so MAVIS cannot silently reset Nexus
+to `Trial001`. Network requests send exactly the MAVIS name; this UDP protocol
+does not read Nexus's current name or its next trial number.
 Each capture gets a unique subdirectory such as
 `Reach01_20261109T153000_123456Z_a1b2c3d4`. Each video filename includes the trial,
 UTC start timestamp and camera index. The exact filenames are in `manifest.json`.
@@ -233,3 +239,25 @@ strobe interference, marker loss and image-quality changes. Define exposure-star
 versus exposure-midpoint alignment, acceptable error, exposure/motion blur and
 gap policy for your experiment. Keep original Nexus trial files as well as C3D
 exports; export cropping and gap filling must not silently change your reference.
+
+## Nexus changes the name but records no frames
+
+MAVIS defaults to Nexus address `172.26.116.93`, UDP port `30`. Name changes
+show that Nexus is receiving some packet content; they do not confirm capture.
+In Nexus select a writable session, verify live camera data, and open
+**Capture > Auto Capture Setup** with Advanced options visible. Enable
+**Start/Stop Over Network**, select **Receive**, the receiving adapter (or
+**All**), and port **30**. Click **Arm**, then **Lock** to remain ready for
+subsequent trials. Use a trial name not already present in that Nexus session.
+Watch Nexus's capture frame counter when starting MAVIS recording.
+
+The start XML includes Name, Notes, Description, DatabasePath, Delay and
+PacketID; the stop XML retains the same trial name. Both are null terminated.
+`control_events.jsonl` saves the exact XML sent, packet ID, destination and send
+time. A successful UDP send remains `sent_unconfirmed`; MAVIS cannot confirm
+Nexus capture through this protocol. If a manually started Nexus trial also
+contains no frames, inspect Nexus acquisition before retrying network control.
+
+References: [Nexus network capture setup](https://vicon-help.atlassian.net/wiki/spaces/Nexus219/pages/673088859/Automatically%2Bstart%2Band%2Bstop%2Bcapture),
+[Nexus UDP format](https://vicon-help.atlassian.net/wiki/spaces/Nexus215/pages/11374978),
+[OptiTrack exposure units](https://docs.optitrack.com/v3.1/motive-ui-panes/properties-pane/properties-pane-camera).

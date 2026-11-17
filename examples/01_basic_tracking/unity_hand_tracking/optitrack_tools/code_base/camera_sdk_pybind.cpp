@@ -13,6 +13,7 @@ PYBIND11_MODULE(optitrack_cam, m) {
     m.doc() = "MAVIS OptiTrack Camera Library bindings";
     m.attr("BINDING_API_VERSION") = 2;
     m.attr("CAMERA_RECORDING_API_VERSION") = 1;
+    m.attr("PARALLEL_RASTERIZE_API_VERSION") = 1;
     m.attr("OPTIHUB_SYNC_CONTROL_API_VERSION") = 1;
 
     // OptiHub 2 exposes synchronization configuration. Frame lock telemetry
@@ -22,6 +23,7 @@ PYBIND11_MODULE(optitrack_cam, m) {
         CameraManager::X().GetSyncSettings(settings);
         HubList hubs;
         py::dict result;
+        result["sdk_initialized"] = CameraManager::X().AreCamerasInitialized();
         result["available"] = hubs.Count() > 0;
         result["hub_count"] = hubs.Count();
         const char* name = CameraManager::X().SyncDeviceName();
@@ -37,7 +39,8 @@ PYBIND11_MODULE(optitrack_cam, m) {
         result["output1_type"] = (int)settings.SyncOutput1PulseDuration;
         result["output1_polarity"] = (int)settings.SyncOutput1Polarity;
         result["input_edge_recording_supported"] = false;
-        result["reason"] = "OptiHub 2 SDK exposes configuration, not input levels or timestamped edges";
+        result["reason"] = hubs.Count() == 0 ? "No OptiHub detected by the SDK" :
+            "OptiHub 2 SDK exposes configuration, not input levels or timestamped edges";
         return result;
     });
 
@@ -47,6 +50,8 @@ PYBIND11_MODULE(optitrack_cam, m) {
             throw py::value_error("Unknown OptiHub sync preset");
         HubList hubs;
         auto& manager = CameraManager::X();
+        if (!manager.AreCamerasInitialized())
+            throw std::runtime_error("SDK camera initialization is still in progress; retry sync setup");
         const auto features = manager.GetSyncFeatures();
         if (hubs.Count() == 0 || !features.CustomSyncSupport)
             throw std::runtime_error("No custom-sync-capable OptiHub is connected");
@@ -85,6 +90,8 @@ PYBIND11_MODULE(optitrack_cam, m) {
     m.def("configure_exposure_output", []() {
         HubList hubs;
         auto& manager = CameraManager::X();
+        if (!manager.AreCamerasInitialized())
+            throw std::runtime_error("SDK camera initialization is still in progress; retry sync setup");
         const auto features = manager.GetSyncFeatures();
         if (hubs.Count() == 0 || !features.CustomSyncSupport || features.SyncOutputCount < 1)
             throw std::runtime_error("No configurable OptiHub output is available");
@@ -196,15 +203,18 @@ PYBIND11_MODULE(optitrack_cam, m) {
         .def("height", &Frame::Height)
         .def("release", &Frame::Release)
         .def("rasterize", [](Frame &f, int width, int height) {
-            std::vector<unsigned char> buffer(width * height * 4);
-            Bitmap framebuffer(width, height, width * 4, Bitmap::ThirtyTwoBit, buffer.data());
-            f.Rasterize(&framebuffer);
-            
-            return py::array_t<unsigned char>(
-                {height, width, 4},
-                {width * 4, 4, 1},
-                buffer.data()
-            );
+            if (width <= 0 || height <= 0)
+                throw py::value_error("Raster dimensions must be positive");
+            // Allocate Python-owned storage once; decode without serializing
+            // the independent camera threads through Python's GIL.
+            py::array_t<unsigned char> result({height, width, 4});
+            auto* pixels = result.mutable_data();
+            {
+                py::gil_scoped_release release;
+                Bitmap framebuffer(width, height, width * 4, Bitmap::ThirtyTwoBit, pixels);
+                f.Rasterize(&framebuffer);
+            }
+            return result;
         });
 
     // Global Helpers

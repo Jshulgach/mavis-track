@@ -2,7 +2,7 @@
 
 Launch `mavis-track gui --backend optitrack`. The controls are independent:
 
-1. Uncheck **Enable Inference** before **Start Cameras** for a camera-only session.
+1. Leave **Enable Inference** unchecked (the default) before **Start Cameras** for a camera-only session.
    Camera startup then does not initialize MediaPipe detectors or load WiLoR
    weights. Inference can be enabled or disabled while capture continues. An
    already executing native inference call may finish, but its result is discarded
@@ -20,6 +20,12 @@ Launch `mavis-track gui --backend optitrack`. The controls are independent:
 
 **Show Camera Background** controls the background under inference overlays;
 it does not disable inference. Model selection requires stopping cameras.
+**Show Camera Preview** (beside **Enable Inference**) hides or shows the camera
+tiles while cameras and recording continue. Turning it off skips camera overlay
+drawing, display color conversion and Qt image updates. It does not disable
+inference or the separately controlled 3D view, and capture still rasterizes
+frames for recording. The initial preview setting is saved in session metadata;
+changes during recording are logged as `camera_preview_changed` events.
 Playback FPS, codec, sync presets and optional Nexus network control are inside
 **Recording / sync setup…**. The live window shows a compact recording health
 indicator; detailed counters/errors are in its tooltip and saved logs. Review
@@ -70,7 +76,7 @@ validate timing against physical exposures.
 
 Capture reads sequential SDK frames while recording instead of draining them
 to the newest image. Preview and inference still use replaceable latest-frame
-slots. A bounded queue of 32 items prevents unbounded recording memory use.
+slots. Each camera has an independent encoding/writing thread and a bounded queue of 32 frames. Sync/status events use a separate bounded queue. A slow camera writer does not block the other camera writers; total buffer memory grows with camera count.
 When encoding/storage cannot keep up, queue drops are counted in the GUI and
 manifest. The count includes dropped video frames or sync samples; it is not a
 hardware pulse count or a guarantee of zero SDK/USB losses. Inspect frame IDs and
@@ -87,8 +93,16 @@ the numeric sessions consumed by `mavis-track replay`/`export`.
 The legacy Camera SDK 1.10 headers expose hub synchronization settings through
 `CameraManager::GetSyncSettings`, including input source, trigger selection,
 divider and global offset. The GUI reads these settings and records samples
-alongside video. Mode changes require the explicit **Apply Sync Mode** action
-and are disabled during recording.
+alongside video. Camera startup applies the selected preset (default: internal
+50 Hz free run) and enables exposure timing on External Sync Out. Later mode
+changes require **Apply Sync Mode** and are disabled during recording.
+Startup setup retries when the hub becomes available. GUI recording remains
+disabled if setup fails, the hub disappears, or any camera's recent SDK sequence
+rate differs from 50 Hz by more than 5%. Allow roughly two seconds after changing
+sync for the rate estimate to settle. Recording setup displays observed camera
+rates; a configuration readback or playback FPS alone does not establish capture
+rate. A sync problem during recording is shown as a warning while Stop remains
+available. Rate agreement does not establish electrical phase or input lock.
 
 The SDK's `Frame` documentation restricts synchronization telemetry, including
 external lock, to eSync devices. The OptiHub interface has no documented input
@@ -157,6 +171,16 @@ Visual Studio 2022 C++ tools, CMake and pybind11 installed:
 python external/build_optitrack.py --restore-sdk --install
 ```
 
+For Visual Studio 2026, use CMake 4.2 or newer and a separate build directory:
+
+```powershell
+python external/build_optitrack.py --restore-sdk --install --generator "Visual Studio 18 2026" --output .cache/optitrack-binding-vs2026
+```
+
+Close the GUI before installation, then restart it to load the new extension.
+The optimized build exposes `PARALLEL_RASTERIZE_API_VERSION = 1`, recorded in
+new trial manifests under `session_metadata.binding_capabilities`.
+
 The build verifies imports and exposes `CAMERA_RECORDING_API_VERSION = 1`,
 `get_sync_status()`, `Frame.timing()` and `Camera.capture_info()`. The current
 source also adds `OPTIHUB_SYNC_CONTROL_API_VERSION = 1` and
@@ -168,3 +192,45 @@ an on-hardware check after building.
 The current source also exposes `configure_exposure_output()` for the setup
 dialog's exposure timing output action. This does not generate Nexus remote
 start/stop contact closures.
+
+## Recording performance diagnostics
+
+New recordings save `acquisition_diagnostics` and `performance_by_camera` in
+both the manifest and diagnostics JSON. Acquisition diagnostics observe every
+frame submitted by capture, including frames rejected by a full writer queue.
+Their SDK gaps therefore describe missing frame IDs before the writer queue;
+`frame_diagnostics` describes gaps among saved frames and includes queue losses.
+Neither counter identifies the cause of SDK gaps or measures electrical pulses.
+
+Per-camera stage aggregates contain count, total seconds and maximum seconds
+for SDK frame retrieval, rasterization, RGBA-to-BGR conversion, writer queue
+wait, and combined video encoding/write. Divide total by count for mean latency.
+Capture stage statistics include queue-rejected images. Encoding/write includes
+codec and backend I/O time; it does not separate CPU encoding from physical disk
+latency. Individual saved frame rows also include these timings. Native binding
+rebuilds from current source decode into Python-owned storage and release the
+GIL during rasterization. Restart the GUI after installing the rebuilt binding.
+
+### Offline throughput benchmark
+
+Run from the repository using the environment that launches the GUI:
+
+```powershell
+.\.venv-wilor\Scripts\python.exe scripts/benchmark_camera_recording.py --trial temp_data/Trial001_20261110T184357_333967Z_c26b35ec
+```
+
+This uses decoded samples from each source camera; no cameras or Nexus control
+are opened. It compares one/four (or all available) concurrent workers, default
+versus single-threaded OpenCV, conversion, MJPG encoding, and shared metadata
+with per-frame flushing versus buffering. Paced runs exercise the actual recorder
+at 50 and 120 FPS per camera, followed by a 30-second 120 FPS run. Results include
+producer lateness, drops, queue timing, finalization time, and environment details.
+Use `--sustained-seconds 60` for a longer run or `0` to skip it.
+
+Each invocation creates a new timestamped directory under
+`.cache/camera-benchmarks`, retaining `report.json`, test videos, and recorder
+sidecars. Source recordings are read only. For meaningful comparisons, close
+the live GUI and other heavy workloads and keep the output drive constant.
+Short writes may be served by OS caching. The benchmark excludes SDK acquisition,
+native rasterization, preview and inference, so a passing result establishes an
+offline baseline rather than guaranteeing live capture performance.

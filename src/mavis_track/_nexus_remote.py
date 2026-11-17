@@ -36,7 +36,11 @@ class NexusRemote:
             packet_id = _packet_id
         root = ET.Element('CaptureStart' if action == 'start' else 'CaptureStop',
                           {} if action == 'start' else {'RESULT': 'SUCCESS'})
-        for key, value in [('Name', trial_name), ('DatabasePath', ''), ('Delay', '0'), ('PacketID', str(packet_id))]:
+        fields = [('Name', trial_name)]
+        if action == 'start':
+            fields.extend([('Notes', ''), ('Description', '')])
+        fields.extend([('DatabasePath', ''), ('Delay', '0'), ('PacketID', str(packet_id))])
+        for key, value in fields:
             ET.SubElement(root, key, VALUE=value)
         packet = b'<?xml version="1.0" encoding="UTF-8" standalone="no"?>' + ET.tostring(root, encoding='utf-8') + b'\0'
         if len(packet) > 1400:
@@ -45,5 +49,6 @@ class NexusRemote:
             client.settimeout(.5)
             client.sendto(packet, (self.address, self.port))
         return {'action': action, 'packet_id': packet_id, 'trial_name': trial_name,
+                    'packet_xml': packet[:-1].decode('utf-8'),
                     'address': self.address, 'port': self.port, 'host_sent_monotonic': time.perf_counter(),
                     'status': 'sent_unconfirmed', 'note': 'UDP send does not confirm Nexus capture or frame alignment'}

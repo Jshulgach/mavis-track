@@ -26,6 +26,9 @@ endif()
 
 # Create the pybind11 module
 pybind11_add_module(optitrack_cam camera_sdk_pybind.cpp)
+if(MSVC)
+    target_compile_options(optitrack_cam PRIVATE /EHsc)
+endif()
 
 # Include directories and definitions
 target_include_directories(optitrack_cam PRIVATE "${CAMERA_SDK_INCLUDE}")

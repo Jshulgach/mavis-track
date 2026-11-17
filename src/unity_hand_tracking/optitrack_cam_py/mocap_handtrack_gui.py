@@ -72,6 +72,7 @@ if __package__:
     from .config import (
         ANGLE_NAMES,
         CALIBRATION_FILE,
+        CAMERA_EXPOSURE,
         EMA_1D_ALPHA,
         EMA_3D_ALPHA,
         KALMAN_1D_MEASUREMENT_NOISE,
@@ -94,6 +95,7 @@ else:
     from config import (
         ANGLE_NAMES,
         CALIBRATION_FILE,
+        CAMERA_EXPOSURE,
         EMA_1D_ALPHA,
         EMA_3D_ALPHA,
         KALMAN_1D_MEASUREMENT_NOISE,
@@ -224,7 +226,10 @@ class StereoHandTrackerGUI(QMainWindow):
         self._display_fps = 0.0
         self._display_t_prev = time.perf_counter()
         # Per-camera exposure (default 10 each, max 6 cameras)
-        self.default_exposure = 10
+        self.default_exposure = CAMERA_EXPOSURE
+        self._startup_sync_error = None
+        self._startup_sync_pending = False
+        self._sync_retry_after = 0.
         self.exposure_spinboxes: list[QSpinBox] = []
         # Per-camera triangulation enable (all on by default)
         self.cam_enabled_checkboxes: list[QCheckBox] = []
@@ -487,12 +492,18 @@ class StereoHandTrackerGUI(QMainWindow):
         self.start_btn.clicked.connect(self.toggle_tracking)
         control_layout.addWidget(self.start_btn)
         self.inference_checkbox = QCheckBox("Enable Inference")
-        self.inference_checkbox.setChecked(True)
+        self.inference_checkbox.setChecked(False)
         self.inference_checkbox.toggled.connect(self._on_inference_toggled)
         control_layout.addWidget(self.inference_checkbox)
-        self.trial_name_edit = QLineEdit("Trial001")
+        self.camera_preview_checkbox = QCheckBox("Show Camera Preview")
+        self.camera_preview_checkbox.setChecked(True)
+        self.camera_preview_checkbox.setToolTip(
+            "Show or hide live camera images and overlays. Cameras and recording continue when hidden.")
+        self.camera_preview_checkbox.toggled.connect(self._on_camera_preview_toggled)
+        control_layout.addWidget(self.camera_preview_checkbox)
+        self.trial_name_edit = QLineEdit()
         self.trial_name_edit.setPlaceholderText("Trial name (match Nexus)")
-        self.trial_name_edit.setToolTip("Use the same trial name in Nexus. UTC timestamps are added to videos automatically.")
+        self.trial_name_edit.setToolTip("Enter the intended unique trial name, e.g. Trial004. Network start sends this name to Nexus; it cannot read Nexus's current name.")
         trial_row = QHBoxLayout()
         trial_row.addWidget(QLabel("Trial"))
         trial_row.addWidget(self.trial_name_edit)
@@ -511,7 +522,7 @@ class StereoHandTrackerGUI(QMainWindow):
         control_layout.addWidget(self.record_btn)
         self.record_fps = QDoubleSpinBox()
         self.record_fps.setRange(1, 1000)
-        self.record_fps.setValue(100)
+        self.record_fps.setValue(50)
         self.record_fps.setPrefix("Playback FPS: ")
         self.record_fps.setToolTip("AVI playback rate only. Actual frame timestamps are saved separately.")
         self.sync_dialog = QDialog(self)
@@ -539,6 +550,7 @@ class StereoHandTrackerGUI(QMainWindow):
         self.sync_preset_combo = QComboBox()
         self.sync_preset_combo.addItem("Vicon Nexus — external 50 Hz", "vicon_external_50hz")
         self.sync_preset_combo.addItem("Internal — 50 Hz (free run)", "internal_50hz")
+        self.sync_preset_combo.setCurrentIndex(1)
         sync_layout.addWidget(self.sync_preset_combo)
         self.sync_apply_btn = QPushButton("Apply Sync Mode")
         self.sync_apply_btn.setEnabled(False)
@@ -546,7 +558,7 @@ class StereoHandTrackerGUI(QMainWindow):
         self.sync_apply_btn.setToolTip("Start cameras first; stop recording before changing sync. External mode requires Vicon pulses.")
         sync_layout.addWidget(self.sync_apply_btn)
         self.sync_action_status = QLabel(
-            "External wiring: Lock Lab GPO → External Sync In.\nSelect a mode and Apply; selecting alone changes nothing.")
+            "Camera startup applies the selected mode (default: internal 50 Hz) and exposure timing on External Sync Out.\nAfter startup, use Apply to change the mode.")
         self.sync_action_status.setWordWrap(True)
         sync_layout.addWidget(self.sync_action_status)
         self.exposure_output_btn = QPushButton("Enable exposure timing on External Sync Out")
@@ -557,7 +569,7 @@ class StereoHandTrackerGUI(QMainWindow):
         self.nexus_network_checkbox = QCheckBox("Send Nexus start/stop over network (optional)")
         sync_layout.addWidget(self.nexus_network_checkbox)
         network_row = QHBoxLayout()
-        self.nexus_address_edit = QLineEdit('127.0.0.1')
+        self.nexus_address_edit = QLineEdit('172.26.116.93')
         self.nexus_address_edit.setPlaceholderText('Nexus computer IPv4 address')
         self.nexus_port_spin = QSpinBox()
         self.nexus_port_spin.setRange(1, 65535)
@@ -565,8 +577,15 @@ class StereoHandTrackerGUI(QMainWindow):
         network_row.addWidget(self.nexus_address_edit)
         network_row.addWidget(self.nexus_port_spin)
         sync_layout.addLayout(network_row)
-        sync_layout.addWidget(QLabel("For network control, arm Nexus with Start/Stop over network set to Receive.\n"
-                                    "UDP requests are logged; sending does not confirm capture."))
+        network_help = QLabel(
+            "In Nexus: select a writable session and verify cameras are live.\n"
+            "Capture > Auto Capture Setup (Advanced): enable Start/Stop Over Network, "
+            "select Receive, the receiving adapter (or All), and port 30. Click Arm; "
+            "enable Lock to remain armed between trials.\n"
+            "The MAVIS trial name replaces Nexus's trial name. Use a unique name. "
+            "A name change alone does not confirm capture; check Nexus's frame counter.")
+        network_help.setWordWrap(True)
+        sync_layout.addWidget(network_help)
         sync_close = QPushButton("Close")
         sync_close.clicked.connect(self.sync_dialog.close)
         sync_layout.addWidget(sync_close)
@@ -664,6 +683,7 @@ class StereoHandTrackerGUI(QMainWindow):
         hdr_cam.setStyleSheet("color: #888; ")
         self.exposure_grid.addWidget(hdr_cam, 0, 1)
         hdr_exp = QLabel("Exposure")
+        hdr_exp.setToolTip("SDK exposure units: microseconds on Flex13 cameras. 50 = 0.05 ms.")
         hdr_exp.setStyleSheet("color: #888; ")
         self.exposure_grid.addWidget(hdr_exp, 0, 2)
         # We will populate the grid dynamically when cameras are initialized
@@ -675,6 +695,7 @@ class StereoHandTrackerGUI(QMainWindow):
         self.exposure_all_spin = QSpinBox()
         self.exposure_all_spin.setRange(1, 480)
         self.exposure_all_spin.setValue(self.default_exposure)
+        self.exposure_all_spin.setToolTip("Flex13: exposure in microseconds. 50 = 0.05 ms.")
         apply_all_btn = QPushButton("Apply")
         apply_all_btn.setStyleSheet(
             "padding: 4px 10px; background-color: #555;"
@@ -1000,6 +1021,17 @@ class StereoHandTrackerGUI(QMainWindow):
     def on_raw_video_toggled(self, checked):
         self.show_raw_video = checked
 
+    def _on_camera_preview_toggled(self, enabled):
+        self.video_grid.setVisible(enabled)
+        self.raw_video_checkbox.setEnabled(enabled)
+        self._wilor_draw_cache.clear()
+        for label in self.video_labels:
+            label.clear()
+        manager = self._capture_manager()
+        recorder = getattr(manager, 'recorder', None)
+        if recorder is not None:
+            recorder.event('camera_preview_changed', enabled=bool(enabled))
+
     def _capture_manager(self):
         if self._wilor_session is not None:
             return self._wilor_session.capture_manager()
@@ -1030,6 +1062,9 @@ class StereoHandTrackerGUI(QMainWindow):
             if manager.recorder is not None:
                 self._begin_recording_stop(manager)
             else:
+                issue = self._recording_sync_issue(manager)
+                if issue:
+                    raise RuntimeError(issue)
                 parent = self.record_directory_edit.text().strip()
                 if not parent:
                     parent = self._choose_record_directory()
@@ -1047,6 +1082,7 @@ class StereoHandTrackerGUI(QMainWindow):
                                         calibration_path=calibration_path,
                                         codec=self.record_codec_combo.currentData(),
                                         session_metadata=dict(nexus_trial_name=name, inference_model=self.inference_model,
+                                                              camera_preview_enabled=self.camera_preview_checkbox.isChecked(),
                                                               nexus_trigger='UDP requests' if remote else 'external device',
                                                               nexus_address=remote.address if remote else None,
                                                               nexus_port=remote.port if remote else None))
@@ -1101,6 +1137,9 @@ class StereoHandTrackerGUI(QMainWindow):
         try:
             preset = self.sync_preset_combo.currentData()
             manager.configure_sync_preset(preset)
+            manager.configure_exposure_output()
+            self._startup_sync_error = None
+            self._startup_sync_pending = False
             self.record_fps.setValue(50)
             self._on_inference_toggled(self.inference_checkbox.isChecked())
             self.sync_action_status.setText(
@@ -1109,8 +1148,35 @@ class StereoHandTrackerGUI(QMainWindow):
                 if preset == "vicon_external_50hz" else
                 "Applied: internal generator 50 Hz, offset 0 µs. Cameras free run.")
         except Exception as exc:
+            self._startup_sync_error = str(exc)
             self.sync_action_status.setText(f"Sync change failed: {exc}")
         self._update_capture_controls()
+
+    def _apply_startup_sync(self):
+        self._startup_sync_error = None
+        self._startup_sync_pending = False
+        manager = self._capture_manager()
+        if manager is None or not hasattr(manager, 'configure_sync_preset'):
+            self.sync_action_status.setText("Automatic sync setup unavailable for this camera backend.")
+            return
+        try:
+            manager.configure_sync_preset(self.sync_preset_combo.currentData())
+            self.record_fps.setValue(50)
+            manager.configure_exposure_output()
+            self.sync_action_status.setText(
+                "Applied at startup: " + self.sync_preset_combo.currentText() +
+                "; External Sync Out = active-high exposure timing.")
+        except Exception as exc:
+            self._startup_sync_error = str(exc)
+            self._startup_sync_pending = True
+            self._sync_retry_after = time.perf_counter() + 2
+            self.sync_action_status.setText(f"Startup sync setup failed; check settings before recording: {exc}")
+
+    def _recording_sync_issue(self, manager):
+        if self._startup_sync_error:
+            return self._startup_sync_error
+        check = getattr(manager, 'recording_sync_issue', None)
+        return check() if check is not None else None
 
     def _apply_exposure_output(self):
         manager = self._capture_manager()
@@ -1126,6 +1192,10 @@ class StereoHandTrackerGUI(QMainWindow):
     def _update_capture_controls(self):
         manager = self._capture_manager()
         sync = manager.get_sync_status() if manager is not None and hasattr(manager, "get_sync_status") else {}
+        if (self._startup_sync_pending and sync.get('available') and
+                getattr(manager, 'recorder', None) is None and self._record_stop_thread is None and
+                time.perf_counter() >= self._sync_retry_after):
+            self._apply_startup_sync()
         can_configure = bool(sync.get("available") and sync.get("configurable") and self.is_running
                              and getattr(manager, "recorder", None) is None
                              and self._record_stop_thread is None)
@@ -1164,6 +1234,11 @@ class StereoHandTrackerGUI(QMainWindow):
         for field in (self.nexus_network_checkbox, self.nexus_address_edit, self.nexus_port_spin):
             field.setEnabled(recorder is None and self._record_stop_thread is None)
         self.record_btn.setText("Stop Recording" if recorder is not None else "Start Recording")
+        issue = self._recording_sync_issue(manager) if manager is not None and self.is_running else None
+        if issue and recorder is None:
+            self.record_btn.setEnabled(False)
+            self.record_status.setText('Recording unavailable: ' + issue)
+            self.record_status.setToolTip(issue)
         self.record_fps.setEnabled(recorder is None)
         self.record_codec_combo.setEnabled(recorder is None)
         if recorder is not None:
@@ -1172,6 +1247,9 @@ class StereoHandTrackerGUI(QMainWindow):
             self.record_status.setText("Recording error — see details" if status['error'] else
                                       f"REC · {status['written']} frames · " + ("gap/drop warning" if problems else "OK"))
             self.record_status.setToolTip(f"{recorder.directory}\n{status}")
+            if issue:
+                self.record_status.setText('REC · sync warning — see details')
+                self.record_status.setToolTip(self.record_status.toolTip() + '\n' + issue)
             if self._nexus_remote is not None:
                 self.record_status.setToolTip(self.record_status.toolTip()+'\nNexus UDP start sent; capture unconfirmed.')
             if self._nexus_error:
@@ -1200,6 +1278,10 @@ class StereoHandTrackerGUI(QMainWindow):
                                          f"trigger: {triggers.get(status.get('input_trigger'), '--')} | "
                                          f"divider: {status.get('input_divider')}\nInput pulses/level: unavailable (SDK)")
                 camera_status = status.get("cameras", [])
+                rates = [f"Cam {c['camera_index']}: {c['observed_rate_hz']:.1f} Hz"
+                         for c in camera_status if c.get('observed_rate_hz') is not None]
+                if rates:
+                    self.sync_status.setText(self.sync_status.text() + '\nObserved: ' + ', '.join(rates))
                 if status.get("input_source") in (2, 3, 4, 5, 6) and camera_status and not any(
                         camera.get("last_frame_host_monotonic") is not None and
                         time.perf_counter() - camera["last_frame_host_monotonic"] < .25
@@ -1209,6 +1291,9 @@ class StereoHandTrackerGUI(QMainWindow):
                 self.sync_status.setText(f"Sync unavailable: {status.get('reason', 'No hub detected')}")
 
     def _display_raw_cameras(self, snapshots):
+        preview = self.camera_preview_checkbox.isChecked()
+        if not preview:
+            snapshots = ()
         for (frame, _), label in zip(snapshots, self.video_labels):
             if frame is None:
                 label.clear()
@@ -1221,8 +1306,9 @@ class StereoHandTrackerGUI(QMainWindow):
             self.video_grid.set_image_aspect(width / height)
         self.hands_label.setText("Hands: -- (inference off)")
         self.fps_label.setText("Inference: off")
-        self.frame_label.setText("Frames: live preview")
-        self.timing_label.setText("Live cameras; inference off")
+        self.frame_label.setText("Frames: live preview" if preview else "Camera preview hidden")
+        self.timing_label.setText("Live cameras; inference off" if preview else
+                                  "Cameras running; preview hidden; inference off")
         self.status_label.setText("Status: Cameras running; inference off")
         if self._inference_error:
             self.status_label.setText(f"Inference unavailable: {self._inference_error}; cameras remain running")
@@ -1619,6 +1705,8 @@ class StereoHandTrackerGUI(QMainWindow):
         matched = self.wilor_view_combo.currentData() == "matched" and packet is not None and not error
         now = time.perf_counter()
         for index, ((live_frame, _), label) in enumerate(zip(snapshots, self.video_labels)):
+            if not self.camera_preview_checkbox.isChecked():
+                break
             if live_frame is None:
                 label.clear()
                 label.setText(f"Camera {index}: waiting for fresh frames")
@@ -1780,7 +1868,8 @@ class StereoHandTrackerGUI(QMainWindow):
             spin.setValue(self.default_exposure)
             spin.setToolTip(
                 f"Exposure for camera {idx}.\n"
-                "Lower = faster/darker, Higher = slower/brighter."
+                "Flex13 units: microseconds (50 = 0.05 ms).\n"
+                "Lower = darker, higher = brighter."
             )
             spin.valueChanged.connect(
                 lambda val, i=idx: self._on_exposure_changed(i, val)
@@ -1796,6 +1885,7 @@ class StereoHandTrackerGUI(QMainWindow):
             self.tracker.set_exposure(idx, self.exposure_spinboxes[idx].value())
         # Apply current triangulation camera selection
         self.tracker.set_enabled_cameras(set(self.enabled_cameras))
+        self._apply_startup_sync()
 
     def start_tracking(self):
         """Start multi-camera tracking."""
@@ -2036,6 +2126,8 @@ class StereoHandTrackerGUI(QMainWindow):
                 self.broadcast_joint_angles(hand_angle_packets)
             # Display frames
             for idx, (frame, results) in enumerate(zip(frames, all_results)):
+                if not self.camera_preview_checkbox.isChecked():
+                    break
                 if frame is None or idx >= len(self.video_labels):
                     continue
                 display_frame = frame.copy()

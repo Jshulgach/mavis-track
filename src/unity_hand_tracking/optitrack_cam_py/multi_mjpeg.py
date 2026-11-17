@@ -23,6 +23,7 @@ Usage from another script:
 
 import threading
 import time
+from collections import deque
 from dataclasses import asdict
 
 from mavis_track._capture import FrameBuffer, snapshots
@@ -75,6 +76,7 @@ class CameraWorker(FrameBuffer, threading.Thread):
         self.width = camera.width()
         self.height = camera.height()
         self.frame_timestamp = None
+        self._rate_samples = deque(maxlen=240)
         self.capture_settings = {"camera_index": index, "width": self.width, "height": self.height}
         self.status = "starting"
         self.error = ""
@@ -85,6 +87,17 @@ class CameraWorker(FrameBuffer, threading.Thread):
 
     def get_resolution(self):
         return self.width, self.height
+
+    def capture_rate(self):
+        """Recent SDK sequence rate on the host clock; not exposure phase/lock."""
+        with self.lock:
+            samples = list(self._rate_samples)
+        if len(samples) < 10 or time.perf_counter() - samples[-1][0] > .25:
+            return None
+        elapsed = samples[-1][0] - samples[0][0]
+        if elapsed < .5 or samples[-1][1] <= samples[0][1]:
+            return None
+        return (samples[-1][1] - samples[0][1]) / elapsed
 
     def set_exposure(self, value):
         """Update exposure at runtime (thread-safe via SDK)."""
@@ -138,6 +151,7 @@ class CameraWorker(FrameBuffer, threading.Thread):
         while self.running:
             recorder = self.manager.recorder if self.manager is not None else None
             # Preserve SDK frames while recording; preview can still replace its slot.
+            acquisition_started = time.perf_counter()
             frame_obj = cam.get_frame() if recorder is not None else cam.get_latest_frame()
             if frame_obj:
                 try:
@@ -148,17 +162,32 @@ class CameraWorker(FrameBuffer, threading.Thread):
                                 "inference_enabled": getattr(self.manager, "inference_enabled", True)}
                     if hasattr(frame_obj, "timing"):
                         metadata.update(frame_obj.timing())
+                    if metadata.get('sdk_frame_id') is not None:
+                        with self.lock:
+                            if self._rate_samples and metadata['sdk_frame_id'] <= self._rate_samples[-1][1]:
+                                self._rate_samples.clear()
+                            self._rate_samples.append((received, metadata['sdk_frame_id']))
+                            while len(self._rate_samples) > 2 and received - self._rate_samples[0][0] > 2:
+                                self._rate_samples.popleft()
+                    raster_started = time.perf_counter()
                     img_rgba = frame_obj.rasterize(self.width, self.height)
+                    conversion_started = time.perf_counter()
                     img_bgr = cv2.cvtColor(img_rgba, cv2.COLOR_RGBA2BGR)
+                    conversion_finished = time.perf_counter()
+                    metadata['capture_stage_seconds'] = {
+                        'sdk_get_frame': received - acquisition_started,
+                        'rasterize': conversion_started - raster_started,
+                        'color_conversion': conversion_finished - conversion_started,
+                    }
                     self.publish_frame(img_bgr)
                     if recorder is not None:
                         recorder.frame(self.index, img_bgr, metadata)
                 finally:
                     frame_obj.release()
-            # Always yield CPU — prevents starving other processes.
-            # ~2ms sleep still allows >200 FPS capture which far exceeds
-            # the ~30 FPS processing rate.
-            time.sleep(0.002)
+            # Drain buffered recording frames immediately; back off on an
+            # empty SDK queue or during preview to avoid busy polling.
+            if recorder is None or not frame_obj:
+                time.sleep(0.002)
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +326,7 @@ class CameraManager:
             status["cameras"] = [dict(camera_index=worker.index,
                                       status=getattr(worker, "status", "unknown"),
                                       error=getattr(worker, "error", ""),
+                                      observed_rate_hz=worker.capture_rate() if hasattr(worker, 'capture_rate') else None,
                                       last_frame_host_monotonic=getattr(worker, "frame_timestamp", None))
                                  for worker in self.workers]
             self._sync_status = status
@@ -307,6 +337,25 @@ class CameraManager:
 
     def get_sync_status(self):
         return dict(self._sync_status)
+
+    def recording_sync_issue(self):
+        """Fail closed for the GUI's requested 50 Hz synced recording workflow."""
+        status = self.get_sync_status()
+        if not status.get('available') or not status.get('hub_count'):
+            return 'OptiHub unavailable; check USB/power and retry sync setup'
+        if status.get('sdk_initialized') is False:
+            return 'Waiting for SDK initialization to finish'
+        if self._expected_sync_hz != 50 or status.get('sync_mode') != 1:
+            return 'Apply the 50 Hz sync preset before recording'
+        if status.get('input_source') == 0 and abs(status.get('internal_frequency_hz', 0) - 50) > .1:
+            return 'OptiHub internal frequency is not 50 Hz'
+        for worker in self.workers:
+            rate = worker.capture_rate()
+            if rate is None:
+                return f'Camera {worker.index}: waiting for a stable frame-rate measurement'
+            if abs(rate - 50) > 2.5:
+                return f'Camera {worker.index}: measured {rate:.1f} Hz; expected 50 Hz'
+        return None
 
     def configure_sync_preset(self, preset):
         """Explicit mode change, serialized with SDK reads and session shutdown."""
@@ -339,7 +388,8 @@ class CameraManager:
             metadata = dict(session_metadata or {})
             metadata['binding_capabilities'] = {
                 name: getattr(optitrack_cam, name, None) for name in (
-                    'BINDING_API_VERSION', 'CAMERA_RECORDING_API_VERSION', 'OPTIHUB_SYNC_CONTROL_API_VERSION')}
+                    'BINDING_API_VERSION', 'CAMERA_RECORDING_API_VERSION', 'OPTIHUB_SYNC_CONTROL_API_VERSION',
+                    'PARALLEL_RASTERIZE_API_VERSION')}
             metadata['sync_at_recording_start'] = self.get_sync_status()
             self.recorder = CameraRecording(directory, nominal_fps=nominal_fps,
                                             camera_ids=self.camera_indices,

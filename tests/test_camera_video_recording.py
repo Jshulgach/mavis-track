@@ -62,16 +62,64 @@ def test_slow_disk_never_blocks_capture_and_reports_overload(monkeypatch, tmp_pa
     writer = recording.CameraRecording(tmp_path / "session", queue_size=1)
     image = np.zeros((48, 64, 3), np.uint8)
     try:
-        writer.frame(0, image, {})
-        assert entered.wait(2)
-        writer.frame(0, image, {})
-        writer.frame(0, image, {})
+        for frame_id in range(3):
+            writer.frame(0, image, {'sdk_frame_id': frame_id,
+                         'capture_stage_seconds': {'rasterize': .01}})
+            if frame_id == 0:
+                assert entered.wait(2)
         assert writer.status()["dropped"] == 1
         assert writer.status()["pending"] == 1
     finally:
         release.set()
         writer.close()
     assert writer.status()["written"] == 2
+    manifest = json.loads((writer.directory / 'manifest.json').read_text())
+    assert manifest['acquisition_diagnostics']['0']['frames'] == 3
+    assert manifest['acquisition_diagnostics']['0']['sdk_missing'] == 0
+    stages = manifest['performance_by_camera']['0']
+    assert stages['rasterize']['count'] == 3  # Includes the queue-rejected frame.
+    assert stages['rasterize']['total_seconds'] == pytest.approx(.03)
+    assert stages['encode_write']['count'] == 2
+    assert stages['writer_queue_wait']['count'] == 2
+
+
+def test_blocked_camera_does_not_block_other_camera_or_sync(monkeypatch, tmp_path):
+    entered, release, other_written = threading.Event(), threading.Event(), threading.Event()
+
+    class Writer:
+        def __init__(self, filename, *args):
+            self.blocked = filename.endswith('camera_0.avi')
+        def isOpened(self): return True
+        def write(self, image):
+            if self.blocked:
+                entered.set()
+                assert release.wait(5)
+            else:
+                other_written.set()
+        def release(self): pass
+
+    monkeypatch.setattr(recording.cv2, 'VideoWriter', Writer)
+    writer = recording.CameraRecording(tmp_path / 'session', queue_size=1)
+    image = np.zeros((48, 64, 3), np.uint8)
+    try:
+        writer.frame(0, image, {})
+        assert entered.wait(2)
+        writer.frame(0, image, {})
+        writer.frame(0, image, {})
+        writer.frame(1, image, {})
+        writer.sync({'host_sampled_monotonic': 1})
+        assert other_written.wait(2)
+        deadline = time.monotonic() + 2
+        while not (writer.directory / 'sync.jsonl').read_text() and time.monotonic() < deadline:
+            time.sleep(.01)
+        assert rows(writer.directory / 'sync.jsonl') == [{'host_sampled_monotonic': 1}]
+    finally:
+        release.set()
+        writer.close()
+    manifest = json.loads((writer.directory / 'manifest.json').read_text())
+    assert manifest['complete']
+    assert manifest['frames_per_camera'] == {'0': 2, '1': 1}
+    assert manifest['queue_drops_by_kind'] == {'camera_0': 1}
 
 
 def test_writer_failure_is_visible_and_manifest_incomplete(monkeypatch, tmp_path):
@@ -148,11 +196,15 @@ def test_capture_reads_every_sdk_frame_when_recording_and_preserves_metadata(mon
     manager = SimpleNamespace(inference_enabled=False, recorder=SimpleNamespace(
         frame=lambda index, image, metadata: captured.append((index, image, metadata))))
     worker = CameraWorker(Camera(), 0, manager=manager)
-    monkeypatch.setattr(time, "sleep", lambda seconds: None)
+    sleeps = []
+    monkeypatch.setattr(time, "sleep", sleeps.append)
     worker._capture()
+    assert sleeps == [.2, .002]  # Startup and empty queue only; no per-frame delay.
     assert [metadata["sdk_frame_id"] for _, _, metadata in captured] == [0, 1, 2]
     assert all(not metadata["inference_enabled"] for _, _, metadata in captured)
     assert all(not image.flags.writeable for _, image, _ in captured)
+    assert all(set(metadata['capture_stage_seconds']) ==
+               {'sdk_get_frame', 'rasterize', 'color_conversion'} for _, _, metadata in captured)
 
 
 def test_inflight_inference_is_discarded_when_disabled_and_can_resume():
