@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/Jshulgach/Hand-Landmark-Tracker/main/docs/source/_static/hand-demo.gif" width="70%" alt="Hand tracking demo">
+  <img src="https://raw.githubusercontent.com/Jshulgach/mavis-track/main/docs/source/_static/hand-demo.gif" width="70%" alt="Hand tracking demo">
 </div>
 
 # MAVIS — Motion Analysis and Visual Interaction Suite
@@ -276,8 +276,8 @@ python -m twine check dist/*
 
 Publishing is gated by the full software matrix and package checks.
 [Audit](AUDIT.md) · [Release checklist](RELEASE.md) ·
-[Documentation](https://jshulgach.github.io/Hand-Landmark-Tracker/) ·
-[Issues](https://github.com/Jshulgach/Hand-Landmark-Tracker/issues)
+[Documentation](https://jshulgach.github.io/mavis-track/) ·
+[Issues](https://github.com/Jshulgach/mavis-track/issues)
 
 MAVIS source is MIT licensed. Optional Qt dependencies and proprietary SDKs
 retain their own licenses; see [third-party notices](THIRD_PARTY_NOTICES.md).

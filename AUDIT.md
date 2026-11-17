@@ -1,6 +1,6 @@
 # Hand Landmark Tracker public package audit
 
-Baseline assessed on October 4, 2026 against commit `d0981e4` on `main`. Implementation follow-up is on branch `codex/mavis-tracking-release` and [pull request #1](https://github.com/Jshulgach/Hand-Landmark-Tracker/pull/1).
+Baseline assessed on October 4, 2026 against commit `d0981e4` on `main`. Implementation follow-up is on branch `codex/mavis-tracking-release` and [pull request #1](https://github.com/Jshulgach/mavis-track/pull/1).
 
 **Current assessment:** MAVIS 0.1.0 is published on PyPI and TestPyPI. The new public API, desktop paths, sessions, cleanup, calibration validation, optional dependencies, and release gates have been implemented. Downloaded public artifacts match the reviewed files and pass fresh Windows installation checks. Remote software validation passes on Windows, Linux, Intel Mac, and Apple Silicon Mac with Python 3.10–3.12. See the follow-up below for verified results and remaining external checks. The original findings are retained as baseline evidence.
 
@@ -206,7 +206,7 @@ MediaPipe's native/transitive dependencies; it is not a zero-dependency install.
 
 ### Remote CI follow-up
 
-The [first remote matrix](https://github.com/Jshulgach/Hand-Landmark-Tracker/actions/runs/37256806112)
+The [first remote matrix](https://github.com/Jshulgach/mavis-track/actions/runs/37256806112)
 passed Windows and Linux on Python 3.10, 3.11, and 3.12, plus the quality checks.
 Mac Intel installed and ran the public tracker and recording command, but its
 video backend rounded the generated 29.97 Hz clip to 30 Hz. The consumer test now
@@ -222,7 +222,7 @@ the job. The [upstream metadata issue](https://github.com/google-ai-edge/mediapi
 also affects later MediaPipe releases; no runtime dependency or published 0.1.0
 artifact was changed to address these validation issues.
 
-The [corrected remote matrix](https://github.com/Jshulgach/Hand-Landmark-Tracker/actions/runs/37257375975)
+The [corrected remote matrix](https://github.com/Jshulgach/mavis-track/actions/runs/37257375975)
 completed successfully for commit `3374ca9`: all 12 platform jobs and the quality
 job passed. Native Apple Silicon tracking ran without translation. Mac validation
 includes installed frame processing, video record/replay/export, and offscreen Qt
@@ -231,7 +231,7 @@ behavior. An added positive-inference check exposed zero detections on Intel Mac
 when processing the screen recording containing rendered hands and a small
 webcam inset. The follow-up uses 12 frames of the existing `HandDynamic.mp4`, with
 a real hand filling the camera view, and retains decoded-frame diagnostics on
-failure. The [positive-inference matrix](https://github.com/Jshulgach/Hand-Landmark-Tracker/actions/runs/37258294168)
+failure. The [positive-inference matrix](https://github.com/Jshulgach/mavis-track/actions/runs/37258294168)
 completed successfully for commit `21cb5f7`: all 12 platform/Python jobs passed
 positive hand inference, installed recording/replay/export, desktop extras, and
 115 tests; the quality job passed as well. Intel Mac Python 3.11 detected one hand

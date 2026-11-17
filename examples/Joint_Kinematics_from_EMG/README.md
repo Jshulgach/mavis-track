@@ -400,7 +400,7 @@ If you use this pipeline in your research, please cite:
   author = {Shulgach, Jonathan},
   title = {EMG-to-Joint-Angles Regression Pipeline},
   year = {2025},
-  url = {https://github.com/Jshulgach/Hand-Landmark-Tracker}
+  url = {https://github.com/Jshulgach/mavis-track}
 }
 ```
 

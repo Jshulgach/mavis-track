@@ -116,7 +116,7 @@ ABI are checked before use; a different existing runtime is preserved. Editable
 installations automatically discover that folder. USB drivers and vendor license
 review still use the official installer. Source ZIPs and shallow clones need a
 full clone or a copied matching runtime. See the
-[external setup guide](https://github.com/Jshulgach/Hand-Landmark-Tracker/tree/main/external)
+[external setup guide](https://github.com/Jshulgach/mavis-track/tree/main/external)
 for recovery, copy and environment-variable commands.
 
 A successful `optitrack:sdk : ok` verifies that the binding loads, not that USB
@@ -138,7 +138,7 @@ python -m mavis_track gui --backend optitrack
 ```
 
 The installer downloads the small
-[sync-capable binding release](https://github.com/Jshulgach/Hand-Landmark-Tracker/releases/tag/optitrack-binding-sync-v1),
+[sync-capable binding release](https://github.com/Jshulgach/mavis-track/releases/tag/optitrack-binding-sync-v1),
 verifies its pinned ZIP and extension checksums, checks native imports in a
 separate process, then installs it beside the existing SDK DLL. It preserves the
 original binding as a backup and rolls back if switching the files fails.

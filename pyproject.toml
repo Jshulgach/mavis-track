@@ -58,11 +58,11 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/jshulgach/Hand-Landmark-Tracker"
-Repository = "https://github.com/jshulgach/Hand-Landmark-Tracker"
-Issues = "https://github.com/jshulgach/Hand-Landmark-Tracker/issues"
-Documentation = "https://jshulgach.github.io/Hand-Landmark-Tracker/"
-Changelog = "https://github.com/jshulgach/Hand-Landmark-Tracker/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/jshulgach/mavis-track"
+Repository = "https://github.com/jshulgach/mavis-track"
+Issues = "https://github.com/jshulgach/mavis-track/issues"
+Documentation = "https://jshulgach.github.io/mavis-track/"
+Changelog = "https://github.com/jshulgach/mavis-track/blob/main/CHANGELOG.md"
 
 [project.scripts]
 mavis-capture-controller = "mavis_track._capture_controller:main"

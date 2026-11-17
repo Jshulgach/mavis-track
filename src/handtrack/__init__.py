@@ -6,7 +6,7 @@ __version__ = "0.1.0"
 __author__ = "Jonathan Shulgach"
 __email__ = "jshulgac@andrew.cmu.edu"
 __license__ = "MIT"
-__url__ = "https://github.com/jshulgach/Hand-Landmark-Tracker"
+__url__ = "https://github.com/jshulgach/mavis-track"
 __description__ = "Python package for hand landmark tracking and kinematics suite"
 
 __all__ = [

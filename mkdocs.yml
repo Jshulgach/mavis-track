@@ -1,8 +1,8 @@
 site_name: MAVIS
 site_description: Hand landmark tracking, calibration, and streaming toolkit.
-site_url: https://jshulgach.github.io/Hand-Landmark-Tracker/
-repo_url: https://github.com/jshulgach/Hand-Landmark-Tracker
-repo_name: Jshulgach/Hand-Landmark-Tracker
+site_url: https://jshulgach.github.io/mavis-track/
+repo_url: https://github.com/jshulgach/mavis-track
+repo_name: Jshulgach/mavis-track
 docs_dir: docs
 site_dir: site
 

@@ -6,7 +6,7 @@ Version 0.1.0 is published on PyPI and TestPyPI. Fresh Windows installs of
 both downloaded releases passed the command, API, and recording/replay/export
 checks. The production GUI extra also passed its dependency/Qt check.
 
-The [remote software matrix](https://github.com/Jshulgach/Hand-Landmark-Tracker/actions/runs/37258294168)
+The [remote software matrix](https://github.com/Jshulgach/mavis-track/actions/runs/37258294168)
 passes on Windows, Linux, Intel Mac, and Apple Silicon Mac with Python 3.10–3.12,
 including 115 tests in each platform job, positive-hand video inference, and
 installed-wheel consumer checks.
