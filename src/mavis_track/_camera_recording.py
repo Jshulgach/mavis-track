@@ -208,7 +208,7 @@ class CameraRecording:
                         raise RuntimeError("Recording stopped: less than 64 MiB of free disk space")
                     with self._manifest_lock, self._lock:
                         self._write_manifest(False)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - Recorder worker must report native encoding/finalization failures.
             with self._lock:
                 self.error = str(exc)
             self._stop.set()
@@ -218,7 +218,7 @@ class CameraRecording:
             for writer in writers.values():
                 try:
                     writer.release()
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - Recorder worker must report native encoding/finalization failures.
                     with self._lock:
                         self.error = f"Cannot finalize video: {exc}"
                     self._stop.set()

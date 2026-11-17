@@ -201,6 +201,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_backend_argument(calibrate_parser)
 
+    calibration_replay_parser = subparsers.add_parser(
+        "replay-calibration", help="recompute calibration from saved corner observations")
+    calibration_replay_parser.add_argument("observations", nargs="?", help="saved corner observation archive")
+    calibration_replay_parser.add_argument("--latest", action="store_true",
+                                           help="find the newest complete observations beside the active calibration")
+    calibration_replay_parser.add_argument("--output", help="output file; --latest defaults to the active calibration")
+    calibration_replay_parser.add_argument("--backend", choices=("optitrack", "webcam"), default="optitrack")
+
     validation_parser = subparsers.add_parser(
         'validate-calibration', help='measure distance error, jitter and repeatability at workspace locations')
     _add_backend_argument(validation_parser)
@@ -404,6 +412,17 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == "replay-calibration":
+        from ._calibration_replay import main as replay_calibration_main
+        forwarded = ["--backend", args.backend]
+        if args.observations is not None:
+            forwarded.append(args.observations)
+        if args.latest:
+            forwarded.append("--latest")
+        if args.output is not None:
+            forwarded.extend(["--output", args.output])
+        return replay_calibration_main(forwarded)
+
     if args.command in ('sync-report', 'sync-replay'):
         from ._sync_tools import run
         return run(args)

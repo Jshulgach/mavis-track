@@ -9,6 +9,7 @@ for compatibility. Use `mavis-track COMMAND --help` for all options.
 | `gui --backend webcam` | Same single-camera desktop studio |
 | `gui --backend webcam --advanced-hands` | Calibrated multi-camera desktop |
 | `calibrate --backend webcam` | Capture and validate ChArUco calibration |
+| `replay-calibration --backend optitrack --latest` | Recompute the active calibration from the latest complete saved observations |
 | `board --backend webcam` | Generate calibration board |
 | `cameras --backend webcam` | Preview capture devices |
 | `record` | Record hands, or synchronized hands/body with `--mode hand-body` |

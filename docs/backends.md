@@ -30,6 +30,20 @@ triangulation. To inspect the last candidate (including files from older version
 Inspection reports failed status for a rejected candidate; it never publishes it.
 The failure reasons and thresholds are saved with new candidates.
 
+Replay the latest complete archive in the configured calibration directory:
+
+```powershell
+python -m mavis_track replay-calibration --backend optitrack --latest
+```
+
+Close the tracking GUI first, then restart it to load the recomputed calibration.
+Replay checks input existence, archive structure and output/source separation
+before fitting. It prints the selected paths and skips incomplete/corrupt archives.
+With no suitable archive, it reports the searched directory without replacing the
+active calibration. A fitted calibration file alone is not a corner-observation
+archive. Camera-preview startup already handles missing/rejected calibrations by
+keeping 2D video available and disabling calibrated reconstruction.
+
 Stereo fitting preserves each camera's standard or extended distortion model
 (rational, thin-prism or tilted), including pairs with different model lengths.
 The fitted intrinsics stay fixed during alignment. If a previous calibration used

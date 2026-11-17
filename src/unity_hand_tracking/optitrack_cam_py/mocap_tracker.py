@@ -202,8 +202,9 @@ class MultiCameraTracker:
             self._clear_calibration()
             self.calibration_error = str(exc)
             print(f"[Calibration] Live preview / 2D only: {exc}")
-            print("[Calibration] Close the tracking GUI, run 'mavis-track calibrate --backend optitrack', "
-                  "then reopen the GUI to enable 3D.")
+            print("[Calibration] Close the GUI. Saved observations for this rig can be replayed with "
+                  "'mavis-track replay-calibration --backend optitrack --latest'. Otherwise run "
+                  "'mavis-track calibrate --backend optitrack', then reopen the GUI to enable 3D.")
 
         if inference_enabled:
             self.initialize_inference()
