@@ -188,16 +188,34 @@ are checkpointed beside the calibration file as
 captured data for offline investigation, including cancelled or failed runs;
 they are not published tracking calibrations. Automatic resume is not provided.
 
-Recompute a saved session without opening cameras:
+Recompute the newest complete saved session and publish it to the configured
+active calibration, without opening cameras:
+
+```powershell
+python -m mavis_track replay-calibration --backend optitrack --latest
+```
+
+The command prints the active calibration path and whether it exists, searches
+that directory for observation archives, and skips incomplete/corrupt sessions.
+It reports missing files clearly and preserves the previous calibration if replay
+fails. Original corner archives cannot be used as output files. All quality gates
+and backup/atomic publication still apply.
+
+To choose a particular archive and a separate output instead:
 
 ```bash
-python -m handtrack.applications._calibration_replay path/to/calibration_observations_TIMESTAMP.npz --output outputs/recovered_calibration.npz
+python -m mavis_track replay-calibration path/to/calibration_observations_TIMESTAMP.npz --output outputs/recovered_calibration.npz
 ```
+
+Replay requires captured corners/IDs. An existing fitted calibration or
+`.candidate.npz` alone cannot recreate the original observations. Normal tracking
+loads an existing valid calibration automatically; it does not re-fit it on each
+launch. Replay is an explicit recovery/recompute action.
 
 Replay applies the same intrinsic, stereo, and board reconstruction quality
 checks. Stereo error fits a shared board pose to both images while holding
 lens parameters and the camera-to-camera transform fixed. The output is saved
-only after all checks pass; choose the output path explicitly.
+only after all checks pass. Explicit archive selection requires an explicit output.
 
 Validate the active calibration using a rigid ChArUco target with the configured
 board layout. Measure the physical distance between two printed ChArUco corner

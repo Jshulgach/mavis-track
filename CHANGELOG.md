@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add offline replay-calibration with --latest discovery in the configured
+  backend calibration directory. Skip incomplete/corrupt observations, report
+  missing files clearly, and prevent output/candidate paths from overwriting
+  the source archive. Keep existing quality gates and publication backups.
+
 - Preserve rational, thin-prism and tilted distortion models during fixed-intrinsic
   stereo fitting. OpenCV otherwise truncates extended mono calibration vectors
   to five coefficients, causing inaccurate extrinsics and intermittent platform
