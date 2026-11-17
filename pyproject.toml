@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mavis-track"
-version = "0.1.0"
+version = "0.2.0"
 description = "Hand landmark tracking, triangulation, kinematics, and streaming toolkit"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"

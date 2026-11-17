@@ -10,7 +10,9 @@ CSV exports, and optional calibrated multi-camera and UDP/LSL workflows.
 
 **Available on [PyPI](https://pypi.org/project/mavis-track/):** the distribution
 name is `mavis-track`, the Python import is `mavis_track`, and the command is
-`mavis-track`. Version 0.1.0 was published on October 4, 2026.
+`mavis-track`. The current source version is **0.2.0**; the first PyPI release,
+0.1.0, was published on October 4, 2026. Package-index publication is separate
+from updating the source version.
 Existing `handtrack` imports and the `handtracker` command remain available
 for compatibility.
 
