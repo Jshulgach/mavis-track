@@ -93,6 +93,30 @@ def deterministic_holdout_indices(count: int, fraction: float = 0.2) -> np.ndarr
     return np.unique(np.linspace(0, count - 1, holdout_count, dtype=np.int32))
 
 
+def usable_planar_layout(points: np.ndarray) -> bool:
+    """Require enough independent board constraints for a planar homography.
+
+    Counting six corners is insufficient when all but one lie on a line.
+    Test geometry alone, before any fitting or held-out split; error scores do
+    not influence which observations are eligible.
+    """
+    values = np.asarray(points, dtype=np.float64)
+    if values.ndim != 2 or values.shape[1] < 2 or len(values) < 4 or not np.isfinite(values).all():
+        return False
+    xy = values[:, :2]
+    xy = xy - xy.mean(axis=0)
+    scale = np.sqrt(np.mean(np.sum(xy * xy, axis=1)))
+    if scale <= np.finfo(float).eps:
+        return False
+    x, y = (xy / scale).T
+    zero, one = np.zeros(len(x)), np.ones(len(x))
+    # Identity-projected normalized board coordinates isolate object geometry.
+    design = np.empty((2 * len(x), 9))
+    design[::2] = np.array([-x, -y, -one, zero, zero, zero, x*x, x*y, x]).T
+    design[1::2] = np.array([zero, zero, zero, -x, -y, -one, x*y, y*y, y]).T
+    return bool(np.linalg.matrix_rank(design, tol=1e-6) >= 8)
+
+
 def _view_error(
     object_points: np.ndarray,
     image_points: np.ndarray,

@@ -5,7 +5,7 @@ import time
 import numpy as np
 
 from ._calibration_preview import create_calibration_preview
-from ._calibration_runtime import validate_intrinsic_quality
+from ._calibration_runtime import CalibrationQualityError, validate_intrinsic_quality
 from ._calibration_session import (
     MIN_STAGE_CAPTURES,
     CalibrationSession,
@@ -48,7 +48,10 @@ def _collect(module, manager, preview, executor, detectors, session, checkpoint)
         ready = (target is not None and (controls.capture_ready or
                  (manual and controls.settings_ready))
                  and batch_started >= controls.last_change)
-        guidance = ''
+        guidance = ("Spread detected corners across several rows and columns; show more of the board. "
+                    "This partial layout cannot constrain calibration."
+                    if target is None and session.phase == "intrinsics" and results[session.camera][0]
+                    else "")
         if ready:
             gate.stable_seconds = controls.stable_seconds
             gate.max_motion_px = controls.motion_px
@@ -77,6 +80,8 @@ def _collect(module, manager, preview, executor, detectors, session, checkpoint)
             size = len(session.intrinsic_corners[session.camera])
             if size >= session.target or (controls.finished and size >= MIN_STAGE_CAPTURES):
                 session.camera += 1
+                while session.camera in session.reused_intrinsics:
+                    session.camera += 1
                 advance = session.camera == session.count
                 if not advance:
                     controls.paused = True
@@ -192,8 +197,14 @@ def _capture_snapshots(manager):
 
 
 def run_capture(module):
+    source = getattr(module, "RESUME_OBSERVATIONS", None)
+    resume_data = None
+    if source is not None:
+        from ._calibration_replay import read_observations
+        resume_data = read_observations(source)
     manager = module.CameraManager()
     preview = None
+    path = None
     try:
         if manager.num_cameras == 0:
             print('No cameras found. Exiting.')
@@ -221,7 +232,7 @@ def run_capture(module):
         path = observation_path(module)
         matrices = dists = None
         with concurrent.futures.ThreadPoolExecutor(max_workers=count) as executor:
-            detected = None
+            detected = str(resume_data["dictionary"].item()) if resume_data is not None else None
             while detected is None:
                 frames = manager.get_all_frames()
                 preview.show_frames(frames, 'Show the ChArUco board to a camera to detect its dictionary.')
@@ -239,6 +250,11 @@ def run_capture(module):
                         detected = name
                         break
             board, detector = module.build_charuco_detector(dict_name=detected)
+            session.board_points = board.getChessboardCorners()
+            if resume_data is not None:
+                from ._calibration_resume import restore_session
+                session = restore_session(source, manager, board, module, resume_data)
+                print(f"Resuming preserved observations: {source}. New checkpoint: {path}")
             # Each concurrent camera task owns its detector's mutable state.
             detectors = [detector] + [module.build_charuco_detector(dict_name=detected)[1]
                                       for _ in range(count - 1)]
@@ -246,8 +262,8 @@ def run_capture(module):
                 session.write_observations(path, module, manager, board, detected, matrices, dists)
             checkpoint()
             print(f'Dictionary: {detected}. Observations: {path}')
-            if not _collect(module, manager, preview, executor, detectors, session, checkpoint):
-                print('Calibration cancelled; previous calibration preserved.')
+            if session.camera < count and not _collect(module, manager, preview, executor, detectors, session, checkpoint):
+                print('Calibration cancelled; observations preserved.')
                 return
             preview.show_frames(manager.get_all_frames(), 'Computing individual camera intrinsics...')
             if controls.cancelled:
@@ -264,8 +280,9 @@ def run_capture(module):
                 controls.paused = True
                 controls.countdown.reset()
                 checkpoint()
-                if not _collect(module, manager, preview, executor, detectors, session, checkpoint):
-                    print('Calibration cancelled; previous calibration preserved.')
+                if (not (resume_data is not None and session.connected(MIN_STAGE_CAPTURES))
+                        and not _collect(module, manager, preview, executor, detectors, session, checkpoint)):
+                    print('Calibration cancelled; observations preserved.')
                     return
                 preview.show_frames(manager.get_all_frames(), 'Computing camera alignment with fixed intrinsics...')
                 if controls.cancelled:
@@ -278,6 +295,12 @@ def run_capture(module):
             captures = sum(map(len, session.intrinsic_corners)) + len(session.alignment_corners[0])
             module.save_calibration(count, image_size, captures, matrices, dists, rotations, translations)
             print(f'Calibration complete. Observations saved: {path}')
+    except CalibrationQualityError:
+        if path is not None:
+            print(f"Observation checkpoint preserved: {path}")
+            if getattr(manager, "backend_kind", "") == "webcam":
+                print(f'Resume: mavis-track calibrate --backend webcam --resume "{path}"')
+        raise
     finally:
         if preview is not None:
             preview.shutdown()

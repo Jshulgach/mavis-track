@@ -4,6 +4,7 @@ import importlib
 import itertools
 import json
 import os
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from handtrack.processing._calibration_solver import (
     calibrate_intrinsic_candidates,
     calibrate_stereo_robust,
     solve_camera_pose_graph,
+    usable_planar_layout,
     validate_heldout_board_reconstruction,
 )
 from mavis_track._webcam_settings import CameraSetupCancelled
@@ -74,16 +76,35 @@ def calibrate_intrinsics(all_corners, all_ids, board, img_size, num_cameras, *, 
     _intrinsic_results = []
     for camera in range(num_cameras):
         objects, images = [], []
+        excluded, original_views = [], []
         for view, (corners, ids) in enumerate(zip(all_corners[camera], all_ids[camera])):
             if view in _reserved_indices:
                 continue
             if corners is not None and ids is not None and len(ids) >= 6:
-                objects.append(board_points[ids.flatten()].astype(np.float32))
+                points = board_points[ids.flatten()].astype(np.float32)
+                if not usable_planar_layout(points):
+                    excluded.append(view + 1)
+                    continue
+                original_views.append(view)
+                objects.append(points)
                 images.append(corners.reshape(-1, 1, 2).astype(np.float32))
+        if excluded:
+            print(f"Camera {camera}: excluded underconstrained corner layouts in views {excluded}; "
+                  f"{len(objects)} usable views remain")
         size = tuple(_image_sizes[camera]) if _image_sizes is not None else img_size
-        result = calibrate_intrinsic_candidates(objects, images, size, min_inliers=12)
+        try:
+            result = calibrate_intrinsic_candidates(objects, images, size, min_inliers=12)
+        except ValueError as exc:
+            raise CalibrationQualityError(f"Camera {camera}: {exc}; capture more well-spread board views") from exc
+        mapping = np.asarray(original_views, dtype=np.int32)
+        result = replace(result, inlier_indices=mapping[result.inlier_indices],
+                         outlier_indices=mapping[result.outlier_indices],
+                         heldout_indices=mapping[result.heldout_indices])
         _intrinsic_results.append(result)
-        print(f"Camera {camera}: training RMS {result.rms:.3f} px; held-out RMS {np.sqrt(np.mean(result.heldout_errors**2)):.3f} px")
+        print(f"Camera {camera}: training RMS {result.rms:.3f} px; "
+              f"held-out RMS {np.sqrt(np.mean(result.heldout_errors**2)):.3f} px; "
+              f"held-out max {np.max(result.heldout_errors):.3f} px "
+              f"(limit {MAX_HELDOUT_REPROJECTION_ERROR:.3f} px)")
     return [result.camera_matrix for result in _intrinsic_results], [result.dist_coeffs for result in _intrinsic_results]
 
 
@@ -103,7 +124,7 @@ def calibrate_stereo_pairs(all_corners, all_ids, board, matrices, dists, img_siz
             if ca is None or cb is None or ia is None or ib is None:
                 continue
             common, aa, bb = np.intersect1d(ia.flatten(), ib.flatten(), return_indices=True)
-            if len(common) >= 6:
+            if len(common) >= 6 and usable_planar_layout(board_points[common]):
                 objects.append(board_points[common].astype(np.float32))
                 images_a.append(ca[aa].reshape(-1, 1, 2).astype(np.float32))
                 images_b.append(cb[bb].reshape(-1, 1, 2).astype(np.float32))
@@ -127,13 +148,13 @@ def calibrate_stereo_pairs(all_corners, all_ids, board, matrices, dists, img_siz
 def validate_intrinsic_quality():
     """Stop before alignment if any lens fit fails the existing quality gate."""
     if not _intrinsic_results:
-        raise ValueError("No intrinsic validation results; alignment not started")
+        raise CalibrationQualityError("No intrinsic validation results; alignment not started")
     for camera, result in enumerate(_intrinsic_results):
         errors = np.asarray(result.heldout_errors)
         if not errors.size or not np.isfinite(errors).all():
-            raise ValueError(f"Camera {camera}: missing or non-finite intrinsic held-out errors")
+            raise CalibrationQualityError(f"Camera {camera}: missing or non-finite intrinsic held-out errors")
         if np.max(errors) > MAX_HELDOUT_REPROJECTION_ERROR:
-            raise ValueError(f"Camera {camera}: intrinsic held-out max {np.max(errors):.3f} px "
+            raise CalibrationQualityError(f"Camera {camera}: intrinsic held-out max {np.max(errors):.3f} px "
                              f"exceeds {MAX_HELDOUT_REPROJECTION_ERROR:.3f} px; alignment not started")
 
 
@@ -245,7 +266,7 @@ def save_calibration(num_cameras, img_size, num_captured, camera_matrices, dist_
     print(f"Validated calibration saved: {destination}")
 
 
-def main(backend):
+def main(backend, *, resume=None):
     global _camera_ids, _image_sizes, _diagnostics, _intrinsic_results, _stereo_results, _reserved_indices, _board_validation, _webcam_settings
     manager_class = _load_backend(backend)
     original = "webcam" if backend == "webcam" else "optitrack_cam_py"
@@ -281,6 +302,8 @@ def main(backend):
     replacements = {"CameraManager": create_manager, "calibrate_intrinsics": solve_intrinsics,
                     "calibrate_stereo_pairs": calibrate_stereo_pairs, "save_calibration": publish,
                     "CAMERA_EXPOSURE": CAMERA_EXPOSURE}
+    if resume is not None:
+        replacements["RESUME_OBSERVATIONS"] = str(resume)
     missing = object()
     previous = {name: getattr(module, name, missing) for name in replacements}
     for name, value in replacements.items():

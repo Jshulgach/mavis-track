@@ -84,11 +84,31 @@ Video mode and lens controls are locked during calibration and tracking. Exposur
 gain and white balance remain available; changes discard stale frames and restart
 the capture wait. USB receipt timestamps are not hardware exposure synchronization.
 
-Saved observations support camera-free recovery:
+Captured corners must constrain the board pose, as well as meet the minimum
+corner count. A narrow partial board with most corners on one row is rejected
+with guidance to show more of the board. Intrinsic fitting also checks this
+geometry in older saved observations before splitting training/held-out views.
+The 1.5 px validation limit applies to the worst held-out view, not the aggregate RMS.
+
+If capture stopped after intrinsics or during alignment, resume on the same rig:
+
+```powershell
+mavis-track calibrate --backend webcam --resume-latest
+```
+
+Or choose an explicit checkpoint with `--resume "path/to/calibration_observations_....npz"`.
+Setup verifies device identities, resolution, format, focus and zoom. Usable
+intrinsic captures are reused and validated again; missing views/alignment are
+collected live. The source archive stays unchanged, and a new checkpoint records
+its origin. Keep the camera mounts and board dimensions unchanged.
+
+Once alignment observations are complete, camera-free recovery is also available:
 
 ```powershell
 mavis-track replay-calibration --backend webcam --latest
 ```
+
+Replay alone cannot collect a missing alignment stage.
 
 Quality gates and atomic publication remain unchanged: failed/cancelled calibration
 preserves the previous validated file. Archives include actual webcam settings.

@@ -200,6 +200,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="launch the multi-camera ChArUco calibration workflow",
     )
     _add_backend_argument(calibrate_parser)
+    resume_group = calibrate_parser.add_mutually_exclusive_group()
+    resume_group.add_argument("--resume", help="resume webcam capture from a saved observation archive")
+    resume_group.add_argument("--resume-latest", action="store_true",
+                              help="resume the newest webcam observation checkpoint, including incomplete sessions")
 
     calibration_replay_parser = subparsers.add_parser(
         "replay-calibration", help="recompute calibration from saved corner observations")
@@ -457,6 +461,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.wilor_fast:
             preview_args.append("--wilor-fast")
         return int(demo_main(preview_args))
+
+    if args.command == "calibrate" and (args.resume is not None or args.resume_latest):
+        from ._calibration_resume import resume_path
+        from ._calibration_runtime import main as calibrate_main
+        try:
+            path = resume_path(selected_backend, args.resume, latest=args.resume_latest)
+            return int(calibrate_main(selected_backend, resume=path))
+        except (OSError, ValueError, KeyError) as exc:
+            print(f"Cannot resume calibration: {exc}")
+            return 1
 
     if args.command == "doctor":
         if args.gui:

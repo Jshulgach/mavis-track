@@ -68,7 +68,7 @@ def test_webcam_three_camera_capture_needs_only_pair_overlap(monkeypatch, tmp_pa
         "CAMERA_EXPOSURE": None, "CALIBRATION_FILE": str(tmp_path / "latest.npz"),
         "auto_detect_dictionary": lambda frame: ("DICT_5X5_250", 6),
         "build_charuco_detector": lambda **kwargs: (
-            SimpleNamespace(getChessboardCorners=lambda: np.zeros((6, 3), np.float32)), object()),
+            SimpleNamespace(getChessboardCorners=lambda: np.c_[np.mgrid[0:3, 0:2].T.reshape(-1, 2)*.04, np.zeros(6)].astype(np.float32)), object()),
         "detect_charuco": detect, "annotate_frame": lambda frame, *args: frame,
         "calibrate_intrinsics": intrinsic, "calibrate_stereo_pairs": stereo,
         "save_calibration": lambda *args: calls.append("publish"),
