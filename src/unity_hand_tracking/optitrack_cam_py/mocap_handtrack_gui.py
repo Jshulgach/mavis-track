@@ -34,7 +34,7 @@ import numpy as np
 from handtrack.applications._illumination_qt import IlluminationPanel
 
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QColor, QFont, QImage, QPalette, QPixmap
+from PyQt5.QtGui import QFont, QImage, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -165,6 +165,7 @@ def _preload_mediapipe_runtime() -> tuple[bool, str]:
         return False, str(exc)
 
 
+from handtrack.applications._dashboard_qt import DASHBOARD_PANEL_STYLE, apply_dashboard_palette
 from handtrack.applications._display import (
     ImagePreview as _ImageLabel, CameraGrid, configure_high_dpi,
     fit_window_to_screen, apply_text_font,
@@ -446,41 +447,7 @@ class StereoHandTrackerGUI(QMainWindow):
     def create_control_panel(self):
         """Create the right-side control panel."""
         panel = QFrame()
-        panel.setStyleSheet("""
-            QFrame { background-color: #2d2d2d; border-radius: 6px; }
-            QLabel { color: #ffffff; }
-            QGroupBox {
-                color: #ffffff;
-                font-weight: bold;
-                border: 1px solid #444;
-                border-radius: 4px;
-                margin-top: 6px;
-                padding-top: 8px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 8px;
-                padding: 0 3px;
-            }
-            QPushButton {
-                background-color: #0078d4;
-                color: white;
-                border: none;
-                padding: 5px 10px;
-                border-radius: 3px;
-                font-weight: bold;
-                }
-            QPushButton:hover { background-color: #1084d8; }
-            QPushButton:pressed { background-color: #006abc; }
-            QPushButton:disabled { background-color: #555; color: #888; }
-            QCheckBox { color: #ffffff; }
-            QSpinBox, QDoubleSpinBox {
-                background-color: #3d3d3d;
-                color: #ffffff;
-                border: 1px solid #555;
-                padding: 2px;
-                }
-        """)
+        panel.setStyleSheet(DASHBOARD_PANEL_STYLE)
         layout = QVBoxLayout(panel)
         layout.setSpacing(6)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -2709,21 +2676,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     configure_high_dpi()
     app = QApplication(sys.argv)
-    app.setStyle("Fusion")
-    palette = app.palette()
-    palette.setColor(QPalette.Window, QColor(30, 30, 30))
-    palette.setColor(QPalette.WindowText, Qt.white)
-    palette.setColor(QPalette.Base, QColor(45, 45, 45))
-    palette.setColor(QPalette.AlternateBase, QColor(30, 30, 30))
-    palette.setColor(QPalette.ToolTipBase, Qt.white)
-    palette.setColor(QPalette.ToolTipText, Qt.white)
-    palette.setColor(QPalette.Text, Qt.white)
-    palette.setColor(QPalette.Button, QColor(45, 45, 45))
-    palette.setColor(QPalette.ButtonText, Qt.white)
-    palette.setColor(QPalette.BrightText, Qt.red)
-    palette.setColor(QPalette.Highlight, QColor(0, 120, 212))
-    palette.setColor(QPalette.HighlightedText, Qt.black)
-    app.setPalette(palette)
+    apply_dashboard_palette(app)
     window = StereoHandTrackerGUI(
         calc_splay=args.calc_splay, model=args.model, wilor_root=args.wilor_root,
         wilor_device=args.wilor_device, wilor_fast=args.wilor_fast,

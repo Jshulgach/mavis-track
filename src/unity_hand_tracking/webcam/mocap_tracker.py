@@ -65,6 +65,8 @@ class MultiCameraTracker:
         self.R_matrices = []
         self.T_vectors = []
         self.projection_matrices = []
+        self.calibration_available = False
+        self.calibration_status = "Calibration not loaded"
 
         # Set of camera indices used for triangulation (all enabled by default)
         self._enabled_cameras: set[int] | None = None  # None = all enabled
@@ -99,11 +101,15 @@ class MultiCameraTracker:
         source_ids = getattr(self.cam_mgr, "camera_indices", None)
         Ks, dists, Rs, Ts, verified = load_camera_calibration(
             CALIBRATION_FILE, count=self.num_cameras, image_sizes=sizes,
-            camera_ids=source_ids, diagnostics=diagnostics)
+            camera_ids=source_ids, diagnostics=diagnostics,
+            webcam_settings=(self.cam_mgr.get_settings_snapshot()
+                             if hasattr(self.cam_mgr, "get_settings_snapshot") else None))
         self.camera_matrices, self.dist_coeffs = Ks, dists
         self.R_matrices, self.T_vectors = Rs, Ts
         self.calibration_identity_verified = verified
         self._compute_projection_matrices()
+        self.calibration_available = True
+        self.calibration_status = "Calibrated 3D"
 
     def _compute_projection_matrices(self):
         """P = K @ [R | T] for each camera."""
@@ -174,6 +180,8 @@ class MultiCameraTracker:
             return False
 
         self.cam_mgr.start_all()
+        if hasattr(self.cam_mgr, "lock_geometry"):
+            self.cam_mgr.lock_geometry()
         if hasattr(self.cam_mgr, "wait_ready"):
             self.cam_mgr.wait_ready()
         self.camera_ids = list(getattr(self.cam_mgr, "camera_indices", range(self.num_cameras)))
@@ -184,10 +192,17 @@ class MultiCameraTracker:
         self.img_height = h
 
         # --- calibration ---
-        self.load_calibration()
+        try:
+            self.load_calibration()
+        except (OSError, ValueError) as exc:
+            self.calibration_available = False
+            self.calibration_status = f"2D preview only — {exc}"
+            self.camera_matrices, self.dist_coeffs = [], []
+            self.R_matrices, self.T_vectors, self.projection_matrices = [], [], []
+            print(self.calibration_status)
 
         # Sanity check: calibration camera count must match hardware
-        if len(self.camera_matrices) != self.num_cameras:
+        if self.calibration_available and len(self.camera_matrices) != self.num_cameras:
             print(
                 f"⚠ Calibration has {len(self.camera_matrices)} cameras "
                 f"but {self.num_cameras} are connected."
@@ -879,6 +894,15 @@ class MultiCameraTracker:
         all_results = self.detect_hands_all_cameras(frames)
 
         t0 = time.perf_counter()
+        if not self.calibration_available:
+            self._triangulation_ms = 0.
+            now = time.perf_counter()
+            self._fps = 1. / max(now - self._t_prev, .001)
+            self._t_prev = now
+            display = [frame if frame is not None else np.zeros(
+                (self.cam_mgr.get_resolution(i)[1], self.cam_mgr.get_resolution(i)[0], 3), np.uint8)
+                for i, frame in enumerate(frames)]
+            return display, [], all_results, {i: {} for i in range(self.num_cameras)}
         all_landmarks_2d = self.extract_landmarks_2d(all_results)
         matched_groups = self.match_hands_across_cameras(all_landmarks_2d)
 

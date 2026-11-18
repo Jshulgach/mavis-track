@@ -160,7 +160,7 @@ def test_staged_capture_preserves_previous_until_alignment_succeeds(monkeypatch,
     def build_detector(**kwargs):
         detector=object()
         detectors.append(detector)
-        return SimpleNamespace(getChessboardCorners=lambda:np.zeros((6,3),np.float32)),detector
+        return SimpleNamespace(getChessboardCorners=lambda: np.c_[np.mgrid[0:3, 0:2].T.reshape(-1, 2)*.04, np.zeros(6)].astype(np.float32)),detector
     def detect(args):
         frame,detector=args
         camera_detectors.setdefault(int(frame[0,0,0]),set()).add(detector)

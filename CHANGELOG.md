@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Make the advanced hands dashboard the default GUI for webcam and OptiTrack backends; retain explicit Studio/demo previews and compatibility with --advanced-hands.
+- Reject underconstrained ChArUco layouts before fitting, handle intrinsic quality failures without a traceback, and resume webcam observation checkpoints without recapturing good intrinsics.
+- Reuse the OptiTrack dashboard theme and control groups in camera testing/calibration; make first-time webcam calibration lock current autofocus positions and verify readback before capture.
+- Keep webcam dashboard tiles pinned to sources and change only toggled capture threads, preserving unaffected streams and their video settings.
+- Make webcam selection toggles update active streams, retain unchecked sources, and add group start/stop controls with restart/cleanup failure handling.
+- Add model-independent Windows USB webcam setup with source previews/selection,
+  native driver control ranges, auto/manual exposure and focus, gain/white balance,
+  requested-versus-actual video modes, and local camera profiles.
+- Move the real webcam calibration entrypoint onto staged shared capture with
+  observation replay. Keep mode/lens controls locked during capture and retain
+  camera/lens metadata to reject incompatible 3D calibration.
+- Reuse webcam settings in Studio and advanced multi-camera tracking; retain
+  2D previews without calibration and fit the advanced webcam window to the screen.
+
+
 ## mavis-track 0.2.0 - 2026-11-17
 
 - Recover calibration capture tuning, manual capture and corner-motion diagnostics; keep small-screen video visible with scrollable controls and use the configured backend exposure at startup.

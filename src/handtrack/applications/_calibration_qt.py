@@ -8,6 +8,8 @@ from PyQt5.QtWidgets import (
     QApplication,
     QDoubleSpinBox,
     QFormLayout,
+    QFrame,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -19,6 +21,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ._dashboard_qt import apply_dashboard_theme
 from ._display import (
     CameraGrid,
     ImagePreview,
@@ -44,8 +47,7 @@ class CalibrationPreview(QMainWindow):
         self.setFont(self._base_font)
         self.resize(1280,800)
         root = QWidget()
-        root.setStyleSheet('QWidget { background: #181818; color: #eee; } '
-                          'QSpinBox, QDoubleSpinBox { background: #292929; }')
+        apply_dashboard_theme(root)
         self.setCentralWidget(root)
         outer = QVBoxLayout(root)
         outer.setContentsMargins(6, 6, 6, 6)
@@ -57,9 +59,9 @@ class CalibrationPreview(QMainWindow):
         self.splitter.addWidget(self.camera_grid)
         self.controls_scroll = QScrollArea()
         self.controls_scroll.setWidgetResizable(True)
-        self.controls_scroll.setMinimumWidth(180)
+        self.controls_scroll.setMinimumWidth(300)
         self.controls_scroll.setFrameShape(QScrollArea.NoFrame)
-        panel = QWidget()
+        panel = QFrame()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(6)
@@ -68,7 +70,9 @@ class CalibrationPreview(QMainWindow):
         self.splitter.setStretchFactor(0, 1)
         self.splitter.setStretchFactor(1, 0)
         self.splitter.setSizes([850, 360])
-        header = QVBoxLayout()
+        status_group = QGroupBox("Calibration")
+        header = QVBoxLayout(status_group)
+        layout.addWidget(status_group)
         self.status = QLabel('Starting cameras...')
         self.status.setWordWrap(True)
         font = QFont(self._base_font);font.setBold(True);self.status.setFont(font)
@@ -85,11 +89,13 @@ class CalibrationPreview(QMainWindow):
         text_row.addWidget(self.text_size)
         text_row.addStretch(1)
         header.addLayout(text_row)
-        layout.addLayout(header)
         self.countdown = QLabel(controls.countdown_text())
         self.countdown.setWordWrap(True)
         self.countdown.setStyleSheet('color: #ffcc66; padding: 8px; background: #292929;')
-        layout.addWidget(self.countdown)
+        header.addWidget(self.countdown)
+        capture_group = QGroupBox("Capture")
+        capture_layout = QVBoxLayout(capture_group)
+        layout.addWidget(capture_group)
         tuning = QFormLayout()
         tuning.setRowWrapPolicy(QFormLayout.WrapLongRows)
         self.capture_settings = {}
@@ -107,30 +113,56 @@ class CalibrationPreview(QMainWindow):
             spin.valueChanged.connect(lambda value, name=name: controls.set_capture_setting(name, value))
             tuning.addRow(label, spin)
             self.capture_settings[name] = spin
-        layout.addLayout(tuning)
+        capture_layout.addLayout(tuning)
         self.capture_now = QPushButton('Capture now (C)')
         self.capture_now.setFocusPolicy(Qt.NoFocus)
         self.capture_now.setToolTip('Skip the motion wait and countdown. Requires a detected board and fresh frames.')
         self.capture_now.clicked.connect(lambda: controls.handle_key('c'))
-        layout.addWidget(self.capture_now)
+        capture_layout.addWidget(self.capture_now)
+        self.pause_button = QPushButton("Pause capture (Space)")
+        self.pause_button.setFocusPolicy(Qt.NoFocus)
+        self.pause_button.clicked.connect(lambda: controls.handle_key("space"))
+        capture_layout.addWidget(self.pause_button)
+        self.finish_button = QPushButton("Next / finish (Q)")
+        self.finish_button.setFocusPolicy(Qt.NoFocus)
+        self.finish_button.clicked.connect(lambda: controls.handle_key("q"))
+        capture_layout.addWidget(self.finish_button)
+        self.cancel_button = QPushButton("Cancel calibration")
+        self.cancel_button.setStyleSheet("QPushButton:enabled { background-color: #d43333; }")
+        self.cancel_button.setFocusPolicy(Qt.NoFocus)
+        self.cancel_button.clicked.connect(self.close)
+        capture_layout.addWidget(self.cancel_button)
         self.exposure_status = QLabel()
         self.exposure_status.setWordWrap(True)
-        layout.addWidget(self.exposure_status)
-        self.illumination = IlluminationPanel(controls.lighting, keyboard_focus=False)
-        self.illumination.target.currentIndexChanged.connect(self._lighting_target_changed)
-        # Stack the shared illumination controls within the narrow sidebar.
-        lighting_grid = self.illumination.layout()
-        for widget in (self.illumination.target, self.illumination.level,
-                       self.illumination.apply_button, self.illumination.high_power,
-                       self.illumination.max_button, self.illumination.status):
-            lighting_grid.removeWidget(widget)
-        lighting_grid.addWidget(self.illumination.target, 0, 0, 1, 2)
-        lighting_grid.addWidget(self.illumination.level, 1, 0)
-        lighting_grid.addWidget(self.illumination.apply_button, 1, 1)
-        lighting_grid.addWidget(self.illumination.high_power, 2, 0, 1, 2)
-        lighting_grid.addWidget(self.illumination.max_button, 3, 0, 1, 2)
-        lighting_grid.addWidget(self.illumination.status, 4, 0, 1, 2)
-        layout.addWidget(self.illumination)
+        camera_group = QGroupBox("Camera Controls")
+        camera_layout = QVBoxLayout(camera_group)
+        camera_layout.addWidget(self.exposure_status)
+        layout.addWidget(camera_group)
+        self.webcam_controls = None
+        self.illumination = None
+        if controls.webcam:
+            from ._webcam_qt import WebcamControls
+            self.webcam_controls = WebcamControls(
+                controls.manager, geometry_locked=True, changed=controls._lighting_changed)
+            self.webcam_controls.target.currentIndexChanged.connect(
+                lambda: setattr(controls, "selected", self.webcam_controls.target.currentData()))
+            camera_layout.addWidget(self.webcam_controls)
+        else:
+            self.illumination = IlluminationPanel(controls.lighting, keyboard_focus=False)
+            self.illumination.target.currentIndexChanged.connect(self._lighting_target_changed)
+            # Stack the shared illumination controls within the narrow sidebar.
+            lighting_grid = self.illumination.layout()
+            for widget in (self.illumination.target, self.illumination.level,
+                           self.illumination.apply_button, self.illumination.high_power,
+                           self.illumination.max_button, self.illumination.status):
+                lighting_grid.removeWidget(widget)
+            lighting_grid.addWidget(self.illumination.target, 0, 0, 1, 2)
+            lighting_grid.addWidget(self.illumination.level, 1, 0)
+            lighting_grid.addWidget(self.illumination.apply_button, 1, 1)
+            lighting_grid.addWidget(self.illumination.high_power, 2, 0, 1, 2)
+            lighting_grid.addWidget(self.illumination.max_button, 3, 0, 1, 2)
+            lighting_grid.addWidget(self.illumination.status, 4, 0, 1, 2)
+            camera_layout.addWidget(self.illumination)
         grid = self.camera_grid.reset(len(controls.exposures))
         self.labels = []
         for index in range(len(controls.exposures)):
@@ -141,7 +173,10 @@ class CalibrationPreview(QMainWindow):
         self.help = QLabel('\n'.join(controls.instructions))
         self.help.setWordWrap(True)
         self.help.setStyleSheet('color: #ccc;')
-        layout.addWidget(self.help)
+        help_group = QGroupBox("Keyboard")
+        help_layout = QVBoxLayout(help_group)
+        help_layout.addWidget(self.help)
+        layout.addWidget(help_group)
         layout.addStretch(1)
         apply_text_font(root, self._base_font)
         self.setFocusPolicy(Qt.StrongFocus)
@@ -174,8 +209,11 @@ class CalibrationPreview(QMainWindow):
         key = keys.get(event.key(),event.text().lower())
         if key and self.controls.handle_key(key,bool(event.modifiers() & Qt.ShiftModifier)):
             self._update_exposure_text()
-            self.illumination.set_target(self.controls.selected)
-            if key in ('i','k','m','h'):
+            if self.webcam_controls is not None:
+                self.webcam_controls.set_target(self.controls.selected)
+            elif self.illumination is not None:
+                self.illumination.set_target(self.controls.selected)
+            if self.illumination is not None and key in ('i','k','m','h'):
                 self.illumination.refresh()
             event.accept()
         else:
@@ -195,8 +233,11 @@ class CalibrationPreview(QMainWindow):
             spin.blockSignals(True)
             spin.setValue(value)
             spin.blockSignals(False)
+        self.pause_button.setText("Resume capture (Space)" if self.controls.paused else "Pause capture (Space)")
         self.status.setText(status)
         self.countdown.setText(self.controls.countdown_text())
+        if self.countdown.width() > 80:
+            self.countdown.setMinimumHeight(max(0, self.countdown.heightForWidth(self.countdown.width())))
         self.help.setText('\n'.join(self.controls.instructions))
         self._update_exposure_text()
         for index,(frame,label) in enumerate(zip(frames,self.labels)):

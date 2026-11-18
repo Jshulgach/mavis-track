@@ -5,12 +5,12 @@ from __future__ import annotations
 import argparse
 import importlib
 import sys
-from typing import Sequence
+from collections.abc import Sequence
 
 from ._backend_selection import resolve_backend
 
 _BACKEND_MODULES = {
-    "webcam": "handtrack.applications.mediapipe_gui",
+    "webcam": "handtrack.applications.webcam_gui",
     "optitrack": "handtrack.applications.optitrack_gui",
 }
 
@@ -35,7 +35,7 @@ def _run_module_entrypoint(module_name: str, passthrough_args: list[str]) -> int
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Launch the tracking GUI for the selected backend."
+        description="Launch the advanced hands dashboard for the selected backend."
     )
     parser.add_argument(
         "--backend",
@@ -46,17 +46,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             "otherwise auto"
         ),
     )
+    gui_mode = parser.add_mutually_exclusive_group()
+    gui_mode.add_argument("--advanced-hands", dest="advanced_hands", action="store_true",
+                          help="use the default multi-camera hands dashboard")
+    gui_mode.add_argument("--studio", dest="advanced_hands", action="store_false",
+                          help="open the single-camera/video Studio explicitly")
+    parser.set_defaults(advanced_hands=True)
     args, passthrough = parser.parse_known_args(argv)
 
-    selected_backend = resolve_backend(args.backend)
-    advanced_hands = "--advanced-hands" in passthrough
-    if advanced_hands:
-        passthrough.remove("--advanced-hands")
-    module_name = (
-        "handtrack.applications.webcam_gui"
-        if selected_backend == "webcam" and advanced_hands
-        else _BACKEND_MODULES[selected_backend]
-    )
+    selected_backend = ("webcam" if not args.advanced_hands and args.backend in (None, "auto")
+                        else resolve_backend(args.backend))
+    if not args.advanced_hands and selected_backend != "webcam":
+        parser.error("Studio uses webcam/video sources; use --backend webcam or omit --studio")
+    module_name = ("handtrack.applications.mediapipe_gui" if not args.advanced_hands
+                   else _BACKEND_MODULES[selected_backend])
     return _run_module_entrypoint(module_name, passthrough)
 
 

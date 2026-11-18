@@ -6,8 +6,9 @@ for compatibility. Use `mavis-track COMMAND --help` for all options.
 | Command | Purpose |
 | --- | --- |
 | `demo` | One camera or video; no calibration; requires GUI extra |
-| `gui --backend webcam` | Same single-camera desktop studio |
-| `gui --backend webcam --advanced-hands` | Calibrated multi-camera desktop |
+| `gui --backend webcam` | Advanced multi-camera hands dashboard |
+| `gui --backend optitrack` | Advanced OptiTrack hands dashboard |
+| `gui --studio --backend webcam` | Explicit single-camera/video Studio |
 | `calibrate --backend webcam` | Capture and validate ChArUco calibration |
 | `replay-calibration --backend optitrack --latest` | Recompute the active calibration from the latest complete saved observations |
 | `board --backend webcam` | Generate calibration board |
@@ -22,7 +23,14 @@ for compatibility. Use `mavis-track COMMAND --help` for all options.
 | `benchmark --backend webcam` | Calibrated backend timing; requires calibration |
 | `test-sender --backend webcam` | Example downstream packets |
 
+`mavis-track gui` defaults to the advanced hands dashboard for either camera
+backend. `--advanced-hands` remains accepted for compatibility. Webcam source selection
+uses the dashboard's **Choose cameras** controls. Use `--studio` or `demo`
+explicitly for a video source or face/body/holistic preview modes.
+
 ```bash
+mavis-track gui --backend webcam
+mavis-track gui --studio --backend webcam --source clip.mp4 --mode pose
 mavis-track demo --source 0 --mode hands
 mavis-track demo --source clip.mp4 --mode pose
 mavis-track record --source 0 --frames 300 --max-hands 2 --session-name demo

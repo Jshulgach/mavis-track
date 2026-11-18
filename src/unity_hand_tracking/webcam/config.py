@@ -23,7 +23,7 @@ PRIMARY_CAMERA_INDEX = 0
 # Cameras that are physically mounted upside down (rotated 180 degrees).
 # Their images will be rotated before MediaPipe detection, and the resulting
 # 2D landmarks will be rotated back to match the calibration coordinate space.
-UPSIDE_DOWN_CAMERAS = [2, 3]
+UPSIDE_DOWN_CAMERAS = []  # Opt in only for a deliberately inverted physical mounting.
 
 # Camera resolution (will be set by actual hardware at runtime)
 CAMERA_WIDTH = None  # Populated at runtime from camera
