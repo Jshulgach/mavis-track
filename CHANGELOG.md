@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Reuse the OptiTrack dashboard theme and control groups in camera testing/calibration; make first-time webcam calibration lock current autofocus positions and verify readback before capture.
 - Keep webcam dashboard tiles pinned to sources and change only toggled capture threads, preserving unaffected streams and their video settings.
 - Make webcam selection toggles update active streams, retain unchecked sources, and add group start/stop controls with restart/cleanup failure handling.
 - Add model-independent Windows USB webcam setup with source previews/selection,

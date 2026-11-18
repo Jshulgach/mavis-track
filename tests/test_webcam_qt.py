@@ -118,22 +118,42 @@ def test_setup_keeps_three_previews_visible_and_validates_resolution(app, size):
         dialog.close()
 
 
-def test_calibration_requires_fixed_focus_where_driver_supports_it(app):
+def test_calibration_locks_current_focus_and_waits_for_readback(app):
     manager = Manager()
     manager.states[2]["capabilities"]["focus"] = {"minimum": 0, "maximum": 40, "step": 1, "auto": True, "manual": True}
-    manager.states[2]["actual"]["autofocus"] = 1
+    manager.states[2]["actual"].update(autofocus=1, focus=17)
+    dialog = WebcamSetupDialog(manager=manager, require_fixed_focus=True)
+    try:
+        assert dialog.use_button.text() == "Start calibration"
+        dialog.accept()
+        assert not manager.saved and dialog._focus_pending
+        assert manager.requests == [([2], {"autofocus": False, "focus": 17}, False)]
+        manager.states[2]["pending"] = True
+        dialog.poll()
+        assert not manager.saved
+        manager.states[2]["actual"].update(autofocus=0, focus=17)
+        manager.states[2]["pending"] = False
+        dialog.poll()
+        assert manager.saved and not dialog._focus_pending
+    finally:
+        dialog._finish()
+
+
+@pytest.mark.parametrize("mode,focus", [(1, 17), (0, 0)])
+def test_failed_focus_lock_keeps_setup_open(app, mode, focus):
+    manager = Manager()
+    manager.states[1]["capabilities"]["focus"] = {"minimum": 0, "maximum": 40, "step": 1, "auto": True, "manual": True}
+    manager.states[1]["actual"].update(autofocus=1, focus=17)
     dialog = WebcamSetupDialog(manager=manager, require_fixed_focus=True)
     try:
         dialog.accept()
-        assert not manager.saved and "Manual focus" in dialog.status.text()
-        manager.states[2]["actual"]["autofocus"] = 0
-        dialog.accept()
-        assert manager.saved
+        manager.states[1]["actual"].update(autofocus=mode, focus=focus)
+        dialog.poll()
+        assert not manager.saved and not dialog._focus_pending
+        assert "could not confirm fixed focus" in dialog.status.text()
+        assert dialog.use_button.isEnabled()
     finally:
-        dialog.timer.stop()
-        dialog.controls.timer.stop()
-        dialog.executor.shutdown(wait=False)
-        dialog.close()
+        dialog._finish()
 
 
 def test_capture_now_cannot_bypass_pending_camera_changes():
@@ -369,3 +389,73 @@ def test_discovering_new_source_preserves_existing_tiles(app, selectable_dialog)
         assert dialog._labels_by_source[source] is previews[source]
         assert dialog.grid.grid.indexOf(tile) >= 0
     assert dialog._labels_by_source[7].text() == "Camera stopped"
+
+def test_first_calibration_handoff_needs_no_existing_archive(app, monkeypatch, tmp_path):
+    import handtrack.applications._webcam_qt as ui
+    import mavis_track.calibration as calibration_files
+    from handtrack.applications import _calibration_capture, webcam_calibration
+    from handtrack.applications._calibration_preview import CalibrationControls
+    from unity_hand_tracking.webcam.multi_webcam import CameraManager
+    manager = Manager()
+    calls = []
+    profile = tmp_path / "never-created" / "settings.json"
+    monkeypatch.setenv("MAVIS_WEBCAM_PROFILE", str(profile))
+    assert not profile.exists()
+    manager.start_all = lambda **kwargs: calls.append("start")
+    manager.stop_all = lambda: calls.append("stop")
+    real_dialog = WebcamSetupDialog
+    def setup_dialog(**options):
+        dialog = real_dialog(manager=manager, **options)
+        def execute():
+            dialog.accept()
+            return dialog.result()
+        dialog.exec_ = execute
+        return dialog
+    monkeypatch.setattr(ui, "WebcamSetupDialog", setup_dialog)
+    monkeypatch.setattr(CameraManager, "create_configured", lambda **opts: ui.configure_webcams(**opts))
+    def no_old_calibration(*args, **kwargs):
+        raise AssertionError("Starting a new calibration must not load an old archive")
+    monkeypatch.setattr(calibration_files, "load_camera_calibration", no_old_calibration)
+    class Preview:
+        def __init__(self):
+            self.controls = CalibrationControls(manager)
+        def show_frames(self, frames, text):
+            calls.append("capture")
+            assert len(frames) == 3
+            self.controls.cancelled = True
+        def shutdown(self):
+            calls.append("close")
+    monkeypatch.setattr(_calibration_capture, "create_calibration_preview", lambda *args: Preview())
+    assert webcam_calibration.main() == 1  # Intentionally cancelled after reaching live capture.
+    assert manager.saved and "capture" in calls and "stop" in calls
+    assert not list(tmp_path.rglob("*.npz"))
+
+def test_dashboard_groups_text_size_and_calibration_actions(app):
+    from PyQt5.QtWidgets import QGroupBox
+
+    from handtrack.applications._calibration_preview import CalibrationControls
+    from handtrack.applications._calibration_qt import CalibrationPreview
+    manager = Manager()
+    setup = WebcamSetupDialog(manager=manager)
+    controls = CalibrationControls(manager)
+    preview = CalibrationPreview(controls, "Test calibration")
+    try:
+        setup_titles = {group.title() for group in setup.findChildren(QGroupBox)}
+        assert {"Camera Testing", "Camera Setup", "Camera Controls"} <= setup_titles
+        original = setup.status.font().pointSizeF()
+        setup.text_size.setValue(140)
+        assert setup.status.font().pointSizeF() > original
+        assert {"Calibration", "Capture", "Camera Controls", "Keyboard"} <= {
+            group.title() for group in preview.findChildren(QGroupBox)}
+        preview.pause_button.click()
+        assert controls.paused
+        preview.show_frames(manager.get_all_frames(), "New calibration")
+        assert "Resume" in preview.pause_button.text()
+        preview.finish_button.click()
+        assert controls.finished
+        preview.cancel_button.click()
+        assert controls.cancelled
+    finally:
+        setup._finish()
+        preview.webcam_controls.timer.stop()
+        preview.shutdown()

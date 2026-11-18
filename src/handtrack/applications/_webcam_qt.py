@@ -1,7 +1,9 @@
 """Shared USB webcam setup and live driver controls; native calls stay off Qt."""
 from __future__ import annotations
 
+import math
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import cv2
@@ -14,12 +16,15 @@ from PyQt5.QtWidgets import (
     QDialog,
     QDoubleSpinBox,
     QFormLayout,
+    QFrame,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -27,6 +32,7 @@ from PyQt5.QtWidgets import (
 
 from mavis_track._webcam_settings import CameraSetupCancelled, load_profile
 
+from ._dashboard_qt import apply_dashboard_theme
 from ._display import (
     CameraGrid,
     ImagePreview,
@@ -282,17 +288,20 @@ class WebcamSetupDialog(QDialog):
         self._want_running = self._preview_running
         self._selection_pending = False
         self._carry = {}
+        self._focus_pending = False
+        self._focus_targets = {}
+        self._focus_deadline = 0.
         profile = load_profile()
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="webcam-setup")
         self.setWindowTitle("MAVIS · USB webcam setup")
-        self.setStyleSheet("QWidget { background: #181818; color: #eee; }")
+        apply_dashboard_theme(self)
         font = QFont(self.font())
         font.setPointSizeF(max(11., font.pointSizeF()))
+        self._base_font = QFont(font)
         self.setFont(font)
         outer = QVBoxLayout(self)
         self.status = QLabel("Choose cameras below. Toggles update live previews; Stop releases all selected cameras.")
         self.status.setWordWrap(True)
-        outer.addWidget(self.status)
         splitter = QSplitter()
         splitter.setChildrenCollapsible(False)
         outer.addWidget(splitter, 1)
@@ -304,9 +313,32 @@ class WebcamSetupDialog(QDialog):
         scroll.setMinimumWidth(300)
         splitter.addWidget(scroll)
         splitter.setSizes([850, 360])
-        self.panel = QWidget()
+        self.panel = QFrame()
         self.panel_layout = QVBoxLayout(self.panel)
         scroll.setWidget(self.panel)
+        session_group = QGroupBox("Calibration Setup" if require_fixed_focus else "Camera Testing")
+        session_layout = QVBoxLayout(session_group)
+        session_layout.addWidget(self.status)
+        self.focus_notice = QLabel(
+            "No prior calibration file is needed. Start calibration locks current focus "
+            "and opens board capture." if require_fixed_focus else
+            "Toggle individual sources below. Camera tiles stay fixed.")
+        self.focus_notice.setWordWrap(True)
+        session_layout.addWidget(self.focus_notice)
+        text_row = QHBoxLayout()
+        text_row.addWidget(QLabel("Text size"))
+        self.text_size = QSpinBox()
+        self.text_size.setRange(100, 180)
+        self.text_size.setSingleStep(10)
+        self.text_size.setSuffix("%")
+        self.text_size.setValue(100)
+        self.text_size.valueChanged.connect(self._change_text_size)
+        text_row.addWidget(self.text_size)
+        session_layout.addLayout(text_row)
+        self.panel_layout.addWidget(session_group)
+        camera_group = QGroupBox("Camera Setup")
+        camera_layout = QVBoxLayout(camera_group)
+        self.panel_layout.addWidget(camera_group)
         form = QFormLayout()
         form.setRowWrapPolicy(QFormLayout.WrapLongRows)
         from mavis_track._webcam_windows import enumerate_devices
@@ -332,29 +364,37 @@ class WebcamSetupDialog(QDialog):
             self.backend.addItem(label, value)
         self.backend.setCurrentIndex(self.backend.findData(manager.backend if manager else profile["backend"]))
         form.addRow("Capture backend", self.backend)
-        self.panel_layout.addLayout(form)
+        camera_layout.addLayout(form)
         self.restart_button = QPushButton("Find / preview sources")
         self.restart_button.clicked.connect(self.restart)
-        self.panel_layout.addWidget(self.restart_button)
+        camera_layout.addWidget(self.restart_button)
         self.checked_layout = QVBoxLayout()
-        self.panel_layout.addLayout(self.checked_layout)
+        camera_layout.addLayout(self.checked_layout)
         self._checks_by_source = {}
         self.checks = []
         self._rebuild_choices()
         self.selection_button = QPushButton("Start selected cameras")
         self.selection_button.clicked.connect(self.select_checked)
-        self.panel_layout.addWidget(self.selection_button)
+        session_layout.insertWidget(1, self.selection_button)
         self.stop_button = QPushButton("Stop cameras")
         self.stop_button.clicked.connect(self.stop_cameras)
-        self.panel_layout.addWidget(self.stop_button)
+        self.stop_button.setStyleSheet("QPushButton:enabled { background-color: #d43333; }")
+        session_layout.insertWidget(2, self.stop_button)
+        self.controls_group = QGroupBox("Camera Controls")
+        self.controls_layout = QVBoxLayout(self.controls_group)
+        self.panel_layout.addWidget(self.controls_group)
         self.controls = None
         self.labels = []
         self._tiles_by_source = {}
         self._labels_by_source = {}
         self._tile_aspect = None
-        self.use_button = QPushButton("Save and continue" if self.owns_manager else "Save and close")
+        self.use_button = QPushButton("Start calibration" if require_fixed_focus else
+                                      "Save and continue" if self.owns_manager else "Save and close")
+        if require_fixed_focus:
+            self.use_button.setToolTip("Lock each supported camera at its current focus, verify readback, and start new board capture.")
         self.use_button.clicked.connect(self.accept)
         self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.setStyleSheet("QPushButton:enabled { background-color: #d43333; }")
         self.cancel_button.clicked.connect(self.reject)
         row = QHBoxLayout()
         row.addWidget(self.use_button)
@@ -408,8 +448,8 @@ class WebcamSetupDialog(QDialog):
             self._carry.update({str(s["source"]): s["requested"] for s in self.manager.get_settings_snapshot()})
 
     def _update_actions(self):
-        mutable = self.owns_manager and not self.geometry_locked and not self._closing
-        busy = self._future is not None
+        mutable = self.owns_manager and not self.geometry_locked and not self._closing and not self._focus_pending
+        busy = self._future is not None or self._focus_pending
         for widget in (self.sources, self.backend, self.restart_button):
             widget.setEnabled(mutable and not busy)
         for check in self.checks:
@@ -427,7 +467,7 @@ class WebcamSetupDialog(QDialog):
         if self.controls:
             self.controls.timer.stop()
             self.controls.hide()
-            self.panel_layout.removeWidget(self.controls)
+            self.controls_layout.removeWidget(self.controls)
             self.controls.deleteLater()
             self.controls = None
         states = self.manager.get_settings_snapshot() if self.manager else []
@@ -436,7 +476,8 @@ class WebcamSetupDialog(QDialog):
         self._rebuild_choices()
         if self._preview_running and states:
             self.controls = WebcamControls(self.manager, geometry_locked=self.geometry_locked)
-            self.panel_layout.addWidget(self.controls)
+            self.controls_layout.addWidget(self.controls)
+        self.controls_group.setVisible(self.controls is not None)
         # Allocate a permanent tile for every known source, including stopped ones.
         # Rebuild the layout only when discovering new sources, not on toggles.
         if set(self._catalog) != set(self._tiles_by_source):
@@ -455,7 +496,9 @@ class WebcamSetupDialog(QDialog):
                     title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
                     layout.addWidget(title)
                     preview = ImagePreview()
+                    preview.setStyleSheet("background-color: #111; border: 1px solid #333;")
                     layout.addWidget(preview, 1)
+                    apply_text_font(container, self.font())
                     containers[source] = container
                     self._labels_by_source[source] = preview
                 grid.addWidget(containers[source], i // self.grid.columns, i % self.grid.columns)
@@ -599,10 +642,67 @@ class WebcamSetupDialog(QDialog):
                 return
             if self._selection_pending:
                 self._apply_selection()
+        self._poll_focus_lock()
         self._refresh_previews()
 
+    def _change_text_size(self, value):
+        font = QFont(self._base_font)
+        font.setPointSizeF(self._base_font.pointSizeF() * value / 100)
+        apply_text_font(self, font)
+
+    def _start_focus_lock(self):
+        requests = []
+        for row, state in enumerate(self.manager.get_settings_snapshot()):
+            focus = state.get("capabilities", {}).get("focus", {})
+            if focus.get("manual") and focus.get("auto") and state["actual"].get("autofocus") != 0:
+                value = state["actual"].get("focus")
+                if value is None or not math.isfinite(value):
+                    raise ValueError(f"Source {state['source']}: focus readback unavailable; set Manual focus before calibration")
+                requests.append((row, state["source"], value))
+        if not requests:
+            return False
+        self._focus_targets = {source: value for _, source, value in requests}
+        self._focus_pending = True
+        self._focus_deadline = time.monotonic() + 15
+        try:
+            for row, _, value in requests:
+                self.manager.request_settings([row], {"autofocus": False, "focus": value})
+        except (ValueError, RuntimeError):
+            self._focus_pending = False
+            self._update_actions()
+            raise
+        self.status.setText("Locking current focus; waiting for camera readback and fresh frames…")
+        self._update_actions()
+        return True
+
+    def _poll_focus_lock(self):
+        if not self._focus_pending or self._closing:
+            return
+        states = {state["source"]: state for state in self.manager.get_settings_snapshot()}
+        selected = [states[source] for source in self._focus_targets if source in states]
+        error = ""
+        waiting = len(selected) != len(self._focus_targets) or any(state["pending"] for state in selected)
+        if waiting and time.monotonic() < self._focus_deadline:
+            return
+        if waiting:
+            error = "Focus lock timed out. Check camera readback, then retry Start calibration."
+        else:
+            for state in selected:
+                actual = state["actual"]
+                if (actual.get("autofocus") != 0 or actual.get("focus") is None
+                        or not math.isclose(actual["focus"], self._focus_targets[state["source"]], abs_tol=.01)):
+                    detail = "; ".join(state["errors"].values())
+                    error = f"Source {state['source']}: could not confirm fixed focus. {detail} Select Manual focus and retry."
+                    break
+        self._focus_pending = False
+        self._update_actions()
+        if error:
+            self.status.setText(error)
+        else:
+            self.accept()
+
     def accept(self):
-        if self.manager is None or self._future is not None or self.selection_timer.isActive():
+        if self.manager is None or self._future is not None or self._focus_pending or self.selection_timer.isActive():
             return
         try:
             if self._operation_error:
@@ -615,10 +715,10 @@ class WebcamSetupDialog(QDialog):
             if self.require_common_resolution and any(size != sizes[0] for size in sizes):
                 raise ValueError("Choose the same actual resolution on every camera before calibration/tracking")
             if self.require_fixed_focus:
-                for state in self.manager.get_settings_snapshot():
-                    focus = state.get("capabilities", {}).get("focus", {})
-                    if focus.get("manual") and focus.get("auto") and state["actual"].get("autofocus") == 1:
-                        raise ValueError(f"Source {state['source']}: select Manual focus and Apply before calibration")
+                if any(state["pending"] for state in self.manager.get_settings_snapshot()):
+                    raise ValueError("Wait for camera settings to settle before starting calibration")
+                if self._start_focus_lock():
+                    return
             self.manager.save_settings()
         except (ValueError, RuntimeError, OSError) as exc:
             self.status.setText(str(exc))
@@ -688,7 +788,9 @@ def configure_webcams(*, keep_running=True, calibration=False):
             "Repair or rename that profile and retry; existing settings were preserved."
         ) from exc
     if dialog.exec_() != QDialog.Accepted:
-        raise CameraSetupCancelled("Webcam setup cancelled; previous calibration preserved.")
+        message = ("Calibration setup cancelled before board capture started." if calibration
+                   else "Webcam setup cancelled.")
+        raise CameraSetupCancelled(message)
     dialog.manager._qt_app = app
     return dialog.manager
 

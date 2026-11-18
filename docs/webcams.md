@@ -24,7 +24,7 @@ While stopped, toggles change the selection without opening cameras. Turning
 every source off stops all streams; select a source again or use Start to resume.
 
 You can also enter source indices and use **Find / preview sources** to probe
-them. **Save and continue** requires the selected sources to be running, so an
+them. The continue action (**Start calibration** in calibration setup) requires the selected sources to be running, so an
 unapplied selection cannot be saved accidentally. The selection order becomes
 the calibration order.
 
@@ -41,9 +41,11 @@ Some OpenCV/driver combinations cannot report auto-exposure state. The panel
 distinguishes an acknowledged request from confirmed device readback.
 
 Set exposure to **Manual** and adjust it while checking the image. Reduce motion
-blur without making the board too dark. Use **Manual focus** and focus the board
-where supported; calibration setup requires autofocus to be disabled when manual
-focus is available. Optional gain, white balance and zoom controls are shown
+blur without making the board too dark. Focus the board where supported.
+**Start calibration** switches supported autofocus cameras to manual at their
+current focus position, waits for fresh frames and verifies focus readback.
+If a driver refuses or cannot confirm the lock, setup stays open with the reason;
+set Manual focus in Camera Controls and retry. Optional gain, white balance and zoom controls are shown
 according to driver support. **Driver settings** opens the selected
 DirectShow camera's native settings panel; close that panel before continuing.
 
@@ -60,8 +62,10 @@ Where identities cannot be verified, check camera order from the previews.
 mavis-track calibrate --backend webcam
 ```
 
-Camera setup opens first. Every selected camera must have the same **actual**
-resolution for the current stereo solver. After setup, webcams use the same
+Camera setup opens first. New calibration does not require an existing
+calibration file or camera profile. Select and start the cameras, check that the
+printed board is sharp, then click **Start calibration**.
+Every selected camera must have the same **actual** resolution for the current stereo solver. After setup, webcams use the same
 staged calibration window as OptiTrack: individual camera intrinsics, then
 overlapping camera pairs. A three-camera chain such as 0–1 and 1–2 is sufficient;
 all three cameras do not have to see the board at once.
@@ -71,6 +75,10 @@ board with `mavis-track board --backend webcam` and verify the printed square
 size before capture. Vary the board's position, distance and tilt between captures,
 and hold it still for each observation. Capture controls, motion diagnostics,
 manual `C` capture and observation checkpoints are shared with OptiTrack.
+Camera testing and calibration reuse the OptiTrack dashboard palette, grouped
+sidebar and action styles. Text size can be increased without shrinking the
+camera images. Calibration also exposes Pause/Resume, Next/finish and Cancel
+buttons alongside the keyboard shortcuts.
 
 Video mode and lens controls are locked during calibration and tracking. Exposure,
 gain and white balance remain available; changes discard stale frames and restart
