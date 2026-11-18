@@ -16,6 +16,7 @@ import math
 import os
 import sys
 import time
+from pathlib import Path
 
 # Preload MediaPipe before importing cv2/PyQt native stacks.
 # This minimizes Windows DLL initialization order conflicts.
@@ -44,6 +45,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QSpinBox,
     QVBoxLayout,
@@ -66,6 +68,7 @@ if __package__:
     from .broadcast import LSLBroadcaster, UDPBroadcaster
     from .config import (
         ANGLE_NAMES,
+        CALIBRATION_FILE,
         EMA_1D_ALPHA,
         EMA_3D_ALPHA,
         KALMAN_1D_MEASUREMENT_NOISE,
@@ -87,6 +90,7 @@ else:
     from broadcast import LSLBroadcaster, UDPBroadcaster
     from config import (
         ANGLE_NAMES,
+        CALIBRATION_FILE,
         EMA_1D_ALPHA,
         EMA_3D_ALPHA,
         KALMAN_1D_MEASUREMENT_NOISE,
@@ -447,6 +451,16 @@ class StereoHandTrackerGUI(QMainWindow):
         self.status_label.setTextFormat(Qt.PlainText)
         self.status_label.setAlignment(Qt.AlignCenter)
         control_layout.addWidget(self.status_label)
+        self.calibration_label = QLabel(
+            "Saved calibration found; start cameras to verify compatibility."
+            if Path(CALIBRATION_FILE).is_file() else
+            "No calibration file at the configured path; 2D camera preview remains available.")
+        self.calibration_label.setWordWrap(True)
+        self.calibration_label.setTextFormat(Qt.PlainText)
+        self.calibration_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.calibration_label.setStyleSheet("color: #aaa;")
+        self.calibration_label.setToolTip(str(CALIBRATION_FILE))
+        control_layout.addWidget(self.calibration_label)
         status_row = QHBoxLayout()
         status_row.setSpacing(4)
         self.frame_label = QLabel("Frames: 0")
@@ -723,6 +737,26 @@ class StereoHandTrackerGUI(QMainWindow):
     # ------------------------------------------------------------------ #
     # Exposure callbacks
     # ------------------------------------------------------------------ #
+    def _show_calibration_notice(self):
+        """Keep geometry status visible independently of the inference status."""
+        path = getattr(self.tracker, "calibration_file", CALIBRATION_FILE)
+        if self.tracker is None:
+            text = "Cameras stopped; saved calibration will be checked at next start."
+            color = "#aaa"
+        elif getattr(self.tracker, "calibration_available", False):
+            text = ("Calibration loaded · current mode is per-camera; rig 3D is paused."
+                    if self._dashboard_modes.uses_regions else
+                    "Calibration loaded · rig 3D available with MediaPipe Hands inference.")
+            color = "#7edb9b"
+        else:
+            reason = getattr(self.tracker, "calibration_error", None) or getattr(
+                self.tracker, "calibration_status", "Calibration unavailable")
+            text = f"Calibration unavailable · {reason}"
+            color = "#ffcc66"
+        self.calibration_label.setText(text)
+        self.calibration_label.setStyleSheet(f"color: {color};")
+        self.calibration_label.setToolTip(f"Calibration file: {path}\n{text}")
+
     def _on_model_selected(self, *_):
         self.inference_model = self.model_combo.currentData()
         self._dashboard_modes.changed()
@@ -1204,6 +1238,7 @@ class StereoHandTrackerGUI(QMainWindow):
             self.tracker.cleanup()
             self.tracker = None
         self.is_running = False
+        self._show_calibration_notice()
         for label in self.video_labels:
             label.clear()
             label.setText("Camera stopped")

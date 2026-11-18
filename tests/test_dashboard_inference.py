@@ -352,3 +352,41 @@ def test_move_to_smaller_monitor_clamps_window_to_desktop(backend, app, monkeypa
     finally:
         window.close()
         app.processEvents()
+
+
+def test_webcam_calibration_notice_survives_inference_off_and_explains_2d_mode(app, monkeypatch):
+    from unity_hand_tracking.webcam import mocap_handracker_gui as module
+    monkeypatch.setattr(module.StereoHandTrackerGUI, 'start_udp_broadcast', lambda self: None)
+    monkeypatch.setattr(module.StereoHandTrackerGUI, 'stop_udp_broadcast', lambda self: None)
+    monkeypatch.setattr(module.StereoHandTrackerGUI, 'broadcast_landmarks', lambda *args: None)
+    monkeypatch.setattr(module.StereoHandTrackerGUI, 'broadcast_joint_angles', lambda *args: None)
+    window = module.StereoHandTrackerGUI()
+    try:
+        window.tracker = SimpleNamespace(cam_mgr=Manager(), calibration_available=True,
+                                         calibration_file='saved-rig.npz', calibration_error=None)
+        window.is_running = True
+        window._dashboard_modes.start()
+        for _ in range(3):
+            window._dashboard_modes.tick()
+        assert 'Calibration loaded' in window.calibration_label.text()
+        assert 'saved-rig.npz' in window.calibration_label.toolTip()
+        assert window.show_3d_checkbox.isEnabled()
+        window.mode_combo.setCurrentIndex(1)
+        assert 'Calibration loaded' in window.calibration_label.text()
+        assert 'rig 3D is paused' in window.calibration_label.text()
+        assert not window.show_3d_checkbox.isEnabled()
+        assert 'MediaPipe Hands' in window.show_3d_checkbox.toolTip()
+        window.mode_combo.setCurrentIndex(0)
+        window.tracker.calibration_available = False
+        window.tracker.calibration_error = 'focus expected 9, got 12; restore saved setting'
+        window._dashboard_modes._cap_state = None
+        window._dashboard_modes.capabilities()
+        for _ in range(3):
+            window._dashboard_modes.tick()
+        assert 'focus expected 9, got 12' in window.calibration_label.text()
+        assert not window.show_3d_checkbox.isEnabled()
+    finally:
+        window.tracker = None
+        window.is_running = False
+        window.close()
+        app.processEvents()

@@ -129,6 +129,13 @@ mavis-track gui --backend webcam
 ```
 
 The advanced multi-camera dashboard is the default for every camera backend.
+The tracking panel keeps a separate calibration notice visible while inference is
+off. Before startup it reports whether the configured file exists; starting
+cameras validates that file against the selected devices, mode and lens settings.
+A loaded calibration remains identified as loaded when a per-camera mode pauses
+rig 3D. Hover the notice to see the file path. Mismatch notices report the
+expected/current settings so the calibrated configuration can be restored.
+
 The older `--advanced-hands` flag remains accepted. **Start selected cameras** and
 **Stop all cameras** start/stop the tracking group. **Choose cameras** opens the
 same selection window, first stopping active tracking and then restarting with

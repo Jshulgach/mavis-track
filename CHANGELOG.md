@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep webcam calibration status visible independently of inference, distinguish loaded calibration from per-camera modes that pause rig 3D, and show expected/actual lens, format and resolution mismatches with restore guidance.
+
 - Add a shared Landmark tracker tab with named/searchable landmark selection, coordinate-labelled position/velocity/acceleration plots, bounded history, pause/clear controls and source-receipt timing. Reset derivative fits across loss, rejected points, identity changes and gaps; retain camera capture while switching tabs.
 
 - Match webcam display controls to OptiTrack with text zoom, monitor DPI refresh and fit/fill previews; wrap status text, stack smoothing fields and keep 3D previews within the window on small screens.

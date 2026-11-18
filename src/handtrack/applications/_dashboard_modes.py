@@ -97,9 +97,18 @@ class DashboardModes:
         if state == self._cap_state:
             return
         self._cap_state = state
+        if self.webcam and hasattr(self.owner, "_show_calibration_notice"):
+            self.owner._show_calibration_notice()
         checkbox = getattr(self.owner, "show_3d_checkbox", None)
         if checkbox is None:
             return
+        if self.webcam:
+            checkbox.setToolTip(
+                "Rig 3D is paused in this per-camera mode. Choose MediaPipe Hands to use saved rig calibration."
+                if self.uses_regions else
+                "Show calibrated rig 3D; enable MediaPipe Hands inference to reconstruct landmarks."
+                if state[1] else
+                "Rig 3D is disabled because calibration did not load; see the calibration notice above.")
         if self.uses_regions:
             if self._saved_3d is None:
                 self._saved_3d = checkbox.isChecked()

@@ -67,6 +67,8 @@ class MultiCameraTracker:
         self.T_vectors = []
         self.projection_matrices = []
         self.calibration_available = False
+        self.calibration_error = None
+        self.calibration_file = str(CALIBRATION_FILE)
         self.calibration_status = "Calibration not loaded"
 
         # Set of camera indices used for triangulation (all enabled by default)
@@ -92,6 +94,7 @@ class MultiCameraTracker:
     def load_calibration(self):
         """Load validated camera matrices, resolving source identity and sizes."""
         from mavis_track.calibration import load_camera_calibration
+        self.calibration_file = str(CALIBRATION_FILE)
         sizes = None
         if self.cam_mgr is not None and hasattr(self.cam_mgr, "get_resolution"):
             sizes = [self.cam_mgr.get_resolution(i) for i in range(self.num_cameras)]
@@ -110,6 +113,7 @@ class MultiCameraTracker:
         self.calibration_identity_verified = verified
         self._compute_projection_matrices()
         self.calibration_available = True
+        self.calibration_error = None
         self.calibration_status = "Calibrated 3D"
 
     def _compute_projection_matrices(self):
@@ -200,6 +204,7 @@ class MultiCameraTracker:
             self.load_calibration()
         except (OSError, ValueError) as exc:
             self.calibration_available = False
+            self.calibration_error = str(exc)
             self.calibration_status = f"2D preview only — {exc}"
             self.camera_matrices, self.dist_coeffs = [], []
             self.R_matrices, self.T_vectors, self.projection_matrices = [], [], []
