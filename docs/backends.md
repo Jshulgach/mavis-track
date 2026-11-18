@@ -245,5 +245,7 @@ Calibrated reconstruction remains separate from independent WiLoR camera models.
 ## Windows USB webcam setup
 
 See [USB webcams](webcams.md) for source selection, native driver controls,
-video modes, shared staged calibration and saved settings. The default webcam
-Studio previews one source; use the advanced webcam GUI for calibrated multi-camera hands.
+video modes, shared staged calibration and saved settings. The default advanced webcam dashboard previews selected sources and supports
+MediaPipe hands/body/face/combined inference or optional WiLoR hands. Explicit
+Studio mode previews one source. Body/face/combined results are per-camera overlays,
+with calibrated reconstruction and legacy hand streams disabled.

@@ -6,8 +6,8 @@ for compatibility. Use `mavis-track COMMAND --help` for all options.
 | Command | Purpose |
 | --- | --- |
 | `demo` | One camera or video; no calibration; requires GUI extra |
-| `gui --backend webcam` | Advanced multi-camera hands dashboard |
-| `gui --backend optitrack` | Advanced OptiTrack hands dashboard |
+| `gui --backend webcam` | Advanced multi-camera inference dashboard |
+| `gui --backend optitrack` | Advanced OptiTrack inference dashboard |
 | `gui --studio --backend webcam` | Explicit single-camera/video Studio |
 | `calibrate --backend webcam` | Capture and validate ChArUco calibration |
 | `replay-calibration --backend optitrack --latest` | Recompute the active calibration from the latest complete saved observations |
@@ -23,13 +23,26 @@ for compatibility. Use `mavis-track COMMAND --help` for all options.
 | `benchmark --backend webcam` | Calibrated backend timing; requires calibration |
 | `test-sender --backend webcam` | Example downstream packets |
 
-`mavis-track gui` defaults to the advanced hands dashboard for either camera
+`mavis-track gui` defaults to the advanced dashboard for either camera
 backend. `--advanced-hands` remains accepted for compatibility. Webcam source selection
 uses the dashboard's **Choose cameras** controls. Use `--studio` or `demo`
-explicitly for a video source or face/body/holistic preview modes.
+explicitly for a video source. Both dashboards offer **Model**, **Tracking mode**
+and **Enable inference**. MediaPipe supports Hands, Body, Face and Hands + body + face;
+WiLoR supports hands only. Body/combined inference follows one person per view,
+and face mode follows one face per view. Inference starts off, so cameras can be tested without
+loading a model. Mode selection and inference toggles keep camera streams open;
+model loading and inference run in background workers. OptiTrack engine changes
+use Stop Cameras, select model, then Start Cameras.
+
+Body, face and combined dashboard results are per-camera overlays; calibrated
+reconstruction, hand angles and hand streams are paused in these modes. They do
+not export numeric body/face recordings. Use the separate `record --mode hand-body`
+workflow for combined numeric recording.
 
 ```bash
 mavis-track gui --backend webcam
+mavis-track gui --backend webcam --mode holistic
+mavis-track gui --backend optitrack --mode pose
 mavis-track gui --studio --backend webcam --source clip.mp4 --mode pose
 mavis-track demo --source 0 --mode hands
 mavis-track demo --source clip.mp4 --mode pose
@@ -91,12 +104,16 @@ After the [isolated WiLoR setup](wilor.md), source checkouts support:
 
 Use `--wilor-device cuda --wilor-fast` to request CUDA half precision and
 layer skipping, or `--wilor-root PATH` for a shared source/assets folder.
-WiLoR supports single-source and OptiTrack multi-camera hand preview:
+WiLoR supports single-source and both webcam/OptiTrack multi-camera hand preview:
 
 ```powershell
 ./.venv-wilor/Scripts/python.exe -m mavis_track gui --backend optitrack --model wilor --wilor-device cuda --wilor-fast --wilor-batch-size 2
+./.venv-wilor/Scripts/python.exe -m mavis_track gui --backend webcam --model wilor --wilor-device cuda
 ```
 
-The grid opens every connected OptiTrack camera. Click Start Cameras and choose
-matched mesh overlays or independent live camera feeds. WiLoR calibrated
-triangulation, recording and streaming are not enabled.
+Start cameras, then enable inference to load WiLoR. The grids show meshes/joints
+paired with their source frames. Webcam WiLoR is a per-camera preview with no
+calibrated reconstruction; OptiTrack retains its experimental calibrated hand
+fusion. WiLoR does not publish the legacy hand streams or numeric recordings.
+Missing dependencies/assets leave the cameras running and show an error; enable
+inference again after correcting the environment.

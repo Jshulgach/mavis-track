@@ -58,6 +58,7 @@ class MultiCameraTracker:
         # MediaPipe Hands instances (one per camera — not thread-safe to share)
         self.hands_detectors: list[Any] = []
         self._mp_hands_cls = None
+        self._inference_params = (MIN_DETECTION_CONFIDENCE, MIN_TRACKING_CONFIDENCE)
 
         # Calibration data
         self.camera_matrices = []
@@ -159,6 +160,7 @@ class MultiCameraTracker:
         self,
         min_det_conf=MIN_DETECTION_CONFIDENCE,
         min_track_conf=MIN_TRACKING_CONFIDENCE,
+        inference_enabled=True,
     ) -> bool:
         """
         Start CameraManager, create per-camera MediaPipe detectors,
@@ -168,7 +170,9 @@ class MultiCameraTracker:
         # Rationale: in some Windows shell/runtime combinations, loading the
         # native camera stack first can cause MediaPipe's _framework_bindings
         # DLL initialization to fail later in the same process.
-        self._mp_hands_cls = self._load_mediapipe_hands_class()
+        self._inference_params = (min_det_conf, min_track_conf)
+        if inference_enabled:
+            self._mp_hands_cls = self._load_mediapipe_hands_class()
 
         # --- cameras via CameraManager ---
         self.cam_mgr = CameraManager()
@@ -208,6 +212,21 @@ class MultiCameraTracker:
                 f"but {self.num_cameras} are connected."
             )
 
+        if inference_enabled:
+            self.initialize_inference()
+        print(f"{self.num_cameras} cameras initialised")
+        return True
+
+    def initialize_inference(self):
+        """Load hand models only on the processing thread when enabled."""
+        if len(self.hands_detectors) == self.num_cameras:
+            return
+        for detector in self.hands_detectors:
+            detector.close()
+        self.hands_detectors = []
+        if self._mp_hands_cls is None:
+            self._mp_hands_cls = self._load_mediapipe_hands_class()
+        min_det_conf, min_track_conf = self._inference_params
         # --- MediaPipe (one instance per camera for thread safety) ---
         self.hands_detectors = []
         for _ in range(self.num_cameras):
@@ -225,11 +244,10 @@ class MultiCameraTracker:
             thread_name_prefix="mp_detect",
         )
 
-        print(f"✓ {self.num_cameras} cameras initialised with threaded MediaPipe")
-        return True
 
     def update_mp_params(self, min_det_conf, min_track_conf):
         """Re-initialize MediaPipe detectors with new confidence thresholds."""
+        self._inference_params = (min_det_conf, min_track_conf)
         if not self.hands_detectors:
             return
 
