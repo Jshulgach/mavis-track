@@ -168,9 +168,21 @@ def selectable_dialog(app, monkeypatch):
             templates = {s["source"]: s for s in self.states}
             self.camera_indices = tuple(indices)
             self.num_cameras = len(indices)
+            self._templates = templates
             self.states = [templates[i] for i in indices]
             self.workers = [object() for _ in indices]
             self.stops = 0
+
+        def reconfigure(self, indices, *, settings=None):
+            old = dict(zip(self.camera_indices, self.workers))
+            self.camera_indices = tuple(indices)
+            self.num_cameras = len(indices)
+            self.states = [deepcopy(self._templates[i]) for i in indices]
+            self.workers = [old.get(i, object()) for i in indices]
+
+        def get_frames_by_source(self):
+            return {source: np.full((48, 64, 3), (source * 30, 0, 0), np.uint8)
+                    for source in self.camera_indices} if self.workers else {}
 
         def stop_all(self):
             self.stops += 1
@@ -180,8 +192,10 @@ def selectable_dialog(app, monkeypatch):
     opened = []
     def open_sources(old, indices, backend, carry):
         if old:
-            old.stop_all()
-        manager = Streams(indices)
+            old.reconfigure(indices, settings=carry)
+            manager = old
+        else:
+            manager = Streams(indices)
         opened.append(manager)
         return manager, ""
 
@@ -206,7 +220,7 @@ def test_camera_toggles_change_streams_and_retain_unchecked_sources(app, selecta
     dialog.accept()
     assert not original.saved
     wait_for(app, lambda: dialog._future is None and tuple(dialog.manager.camera_indices) == (1, 4))
-    assert original.stops == 1
+    assert original.stops == 0
     assert list(dialog._checks_by_source) == [1, 2, 4]
     assert not dialog._checks_by_source[2].isChecked()
     dialog._checks_by_source[2].click()
@@ -219,7 +233,8 @@ def test_stop_and_start_release_all_cameras_and_keep_selection(app, selectable_d
     dialog.stop_button.click()
     wait_for(app, lambda: dialog._future is None and not dialog._preview_running)
     assert opened[0].stops == 1 and not opened[0].workers
-    assert not dialog.labels and not dialog.use_button.isEnabled()
+    assert all(label.text() == "Camera stopped" for label in dialog.labels)
+    assert not dialog.use_button.isEnabled()
     dialog._checks_by_source[2].click()
     app.processEvents()
     assert len(opened) == 1  # Selection while stopped must not acquire a camera.
@@ -233,7 +248,8 @@ def test_deselect_all_stops_and_camera_can_be_selected_again(app, selectable_dia
     for check in dialog.checks:
         check.click()
     wait_for(app, lambda: dialog._future is None and not dialog._preview_running)
-    assert not dialog._selected and not dialog.labels
+    assert not dialog._selected
+    assert all(label.text() == "Camera stopped" for label in dialog.labels)
     dialog._checks_by_source[4].click()
     wait_for(app, lambda: dialog._future is None and dialog._preview_running)
     assert tuple(dialog.manager.camera_indices) == (4,)
@@ -255,7 +271,7 @@ def test_stop_during_start_waits_then_releases_new_streams(app, selectable_dialo
     wait_for(app, lambda: dialog._future is None and not dialog._preview_running)
     assert len(opened) == 2
     assert not opened[-1].workers
-    assert not dialog.labels
+    assert all(label.text() == "Camera stopped" for label in dialog.labels)
 
 
 def test_advanced_camera_selection_releases_tracking_before_setup(monkeypatch):
@@ -285,7 +301,8 @@ def test_failed_reopen_does_not_leave_savable_frozen_previews(app, selectable_di
     monkeypatch.setattr(WebcamSetupDialog, "_open", staticmethod(failed))
     dialog.selection_button.click()
     wait_for(app, lambda: dialog._future is None)
-    assert not dialog._preview_running and not dialog.labels
+    assert not dialog._preview_running
+    assert all(label.pixmap() is None for label in dialog.labels)
     assert not dialog.use_button.isEnabled()
     assert "Driver unavailable" in dialog.status.text()
     dialog.accept()
@@ -304,3 +321,51 @@ def test_stop_failure_cannot_save_stale_running_state(app, selectable_dialog, mo
     assert not dialog.manager.saved
     assert "Close native driver dialog" in dialog.status.text()
     monkeypatch.setattr(dialog.manager, "stop_all", original)
+
+def test_toggling_keeps_all_tiles_and_maps_frames_by_source(app, selectable_dialog):
+    dialog, _ = selectable_dialog
+    dialog.show()
+    dialog.resize(800, 600)
+    app.processEvents()
+    dialog.poll()
+    tiles = dict(dialog._tiles_by_source)
+    previews = dict(dialog._labels_by_source)
+    checks = dict(dialog._checks_by_source)
+    content = dialog.grid._content
+    kept = {source: worker for source, worker in zip(dialog.manager.camera_indices, dialog.manager.workers)}
+    for _ in range(3):
+        dialog._checks_by_source[2].click()
+        wait_for(app, lambda: dialog._future is None and tuple(dialog.manager.camera_indices) == (1, 4))
+        dialog.poll()
+        assert dialog._labels_by_source[2].text() == "Camera stopped"
+        assert dialog._labels_by_source[2].pixmap() is None
+        for source in (1, 4):
+            assert dialog.manager.workers[dialog.manager.camera_indices.index(source)] is kept[source]
+            pixmap = dialog._labels_by_source[source].pixmap()
+            assert pixmap is not None
+            assert pixmap.toImage().pixelColor(0, 0).blue() == source * 30
+        dialog._checks_by_source[2].click()
+        wait_for(app, lambda: dialog._future is None and tuple(dialog.manager.camera_indices) == (1, 4, 2))
+        dialog.poll()
+        assert dialog.grid._content is content
+        assert dialog._tiles_by_source == tiles
+        assert dialog._labels_by_source == previews
+        assert dialog._checks_by_source == checks
+        for source, label in previews.items():
+            assert label.pixmap().toImage().pixelColor(0, 0).blue() == source * 30
+
+def test_discovering_new_source_preserves_existing_tiles(app, selectable_dialog):
+    from PyQt5.QtCore import QCoreApplication, QEvent
+    dialog, _ = selectable_dialog
+    original = dict(dialog._tiles_by_source)
+    previews = dict(dialog._labels_by_source)
+    dialog._catalog[7] = "New USB camera"
+    dialog.bind()
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    app.processEvents()
+    assert set(dialog._tiles_by_source) == {1, 2, 4, 7}
+    for source, tile in original.items():
+        assert dialog._tiles_by_source[source] is tile
+        assert dialog._labels_by_source[source] is previews[source]
+        assert dialog.grid.grid.indexOf(tile) >= 0
+    assert dialog._labels_by_source[7].text() == "Camera stopped"

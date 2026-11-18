@@ -393,6 +393,65 @@ class CameraManager:
             raise RuntimeError(f"Camera workers did not stop: {alive}")
         self.workers.clear()
 
+    def reconfigure(self, indices, *, settings=None):
+        """Change only added/removed sources, retaining existing capture threads.
+
+        Called by the setup executor while capture geometry is unlocked.
+        Publishing worker lists atomically lets preview readers retain their own
+        worker references without pairing positional frames with changing IDs.
+        """
+        indices = list(indices)
+        if (len(indices) > 16 or len(set(indices)) != len(indices)
+                or any(type(i) is not int or not 0 <= i < 64 for i in indices)):
+            raise ValueError("Choose up to 16 unique camera source indices")
+        current = list(self.workers)
+        if any(worker.geometry_locked for worker in current):
+            raise ValueError("Stop tracking/calibration before changing camera sources")
+        existing = {worker.cam_index: worker for worker in current}
+        removed = [worker for source, worker in existing.items() if source not in indices]
+        for worker in removed:
+            worker.stop()
+        for worker in removed:
+            worker.join(timeout=3)
+        alive = [worker.name for worker in removed if worker.is_alive()]
+        if alive:
+            raise RuntimeError(f"Camera workers did not stop: {alive}")
+        existing = {source: worker for source, worker in existing.items() if source in indices}
+        self.workers = list(existing.values())
+        self.camera_indices = list(existing)
+        self.num_cameras = len(self.workers)
+        errors = []
+        additions = []
+        for source in indices:
+            if source in existing:
+                continue
+            worker = CameraWorker(source, exposure=CAMERA_EXPOSURE, backend=self.backend,
+                                  settings=(settings or {}).get(str(source),
+                                      self.profile["cameras"].get(str(source), {})))
+            worker.start()
+            additions.append(worker)
+        for worker in additions:
+            worker.ready.wait(timeout=10)
+            if worker.frame_timestamp is None:
+                worker.stop()
+                worker.join(timeout=3)
+                errors.append(f"{worker.name} did not provide a frame: {worker.error}")
+                # Keep a stuck native worker owned so subsequent cleanup can retry.
+                if worker.is_alive():
+                    existing[worker.cam_index] = worker
+                continue
+            existing[worker.cam_index] = worker
+        self.workers = [existing[source] for source in indices if source in existing]
+        self.camera_indices = [worker.cam_index for worker in self.workers]
+        self.num_cameras = len(self.workers)
+        if errors:
+            raise RuntimeError("; ".join(errors))
+        return self.workers
+
+    def get_frames_by_source(self):
+        """Preview snapshots keyed by source identity, never transient row order."""
+        return {worker.cam_index: worker.get_snapshot()[0] for worker in list(self.workers)}
+
     def set_exposure(self, cam_index, value):
         """Set exposure for a worker by its local index in camera_indices."""
         if 0 <= cam_index < len(self.workers):

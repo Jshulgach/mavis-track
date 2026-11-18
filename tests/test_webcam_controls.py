@@ -234,3 +234,59 @@ def test_native_fallback_recovers_a_driver_requiring_explicit_flags():
     assert not errors and accepted == {"auto_exposure": False, "exposure": -7}
     assert actual["exposure"] == -7 and actual["auto_exposure"] == 0
     assert actual["_unverified_controls"] == {}
+
+def test_reconfigure_keeps_existing_capture_threads_and_opens_only_added_source(monkeypatch, tmp_path):
+    opened = {}
+    def open_camera(source, *args):
+        cap = Capture()
+        opened.setdefault(source, []).append(cap)
+        return cap
+    monkeypatch.setattr(multi_webcam, "_open_camera", open_camera)
+    monkeypatch.setattr(multi_webcam, "enumerate_devices", lambda **kwargs: [])
+    manager = multi_webcam.CameraManager([0, 1, 2], profile=tmp_path / "missing.json")
+    manager.start_all()
+    original = {worker.cam_index: worker for worker in manager.workers}
+    try:
+        before = original[0].frame_timestamp
+        manager.reconfigure([0, 2])
+        assert manager.workers == [original[0], original[2]]
+        assert not original[1].is_alive()
+        assert len(opened[0]) == len(opened[1]) == len(opened[2]) == 2
+        wait_for(lambda: original[0].frame_timestamp > before)
+        frames = manager.get_frames_by_source()
+        assert set(frames) == {0, 2} and all(frame is not None for frame in frames.values())
+        manager.reconfigure([2, 0, 1])
+        assert manager.workers[:2] == [original[2], original[0]]
+        assert manager.workers[2] is not original[1]
+        assert len(opened[0]) == len(opened[2]) == 2
+        assert len(opened[1]) == 3  # Reopening this source does not probe the other cameras.
+        assert manager.camera_indices == [2, 0, 1]
+        manager.lock_geometry()
+        with pytest.raises(ValueError, match="Stop tracking"):
+            manager.reconfigure([0])
+    finally:
+        manager.stop_all()
+    assert all(not worker.is_alive() for worker in original.values())
+
+
+def test_reconfigure_failed_new_camera_keeps_healthy_streams(monkeypatch, tmp_path):
+    monkeypatch.setattr(multi_webcam, "_open_camera", lambda *args: Capture())
+    monkeypatch.setattr(multi_webcam, "enumerate_devices", lambda **kwargs: [])
+    manager = multi_webcam.CameraManager([0, 1], profile=tmp_path / "missing.json")
+    manager.start_all()
+    original = list(manager.workers)
+    worker_class = multi_webcam.CameraWorker
+    def create(source, **kwargs):
+        worker = worker_class(source, **kwargs)
+        if source == 2:
+            worker._capture = lambda: (_ for _ in ()).throw(RuntimeError("Camera unplugged"))
+        return worker
+    monkeypatch.setattr(multi_webcam, "CameraWorker", create)
+    try:
+        with pytest.raises(RuntimeError, match="unplugged"):
+            manager.reconfigure([0, 1, 2])
+        assert manager.workers == original and manager.camera_indices == [0, 1]
+        assert all(worker.is_alive() for worker in original)
+        assert set(manager.get_frames_by_source()) == {0, 1}
+    finally:
+        manager.stop_all()

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Keep webcam dashboard tiles pinned to sources and change only toggled capture threads, preserving unaffected streams and their video settings.
 - Make webcam selection toggles update active streams, retain unchecked sources, and add group start/stop controls with restart/cleanup failure handling.
 - Add model-independent Windows USB webcam setup with source previews/selection,
   native driver control ranges, auto/manual exposure and focus, gain/white balance,

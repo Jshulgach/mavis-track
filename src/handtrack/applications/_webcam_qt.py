@@ -318,7 +318,8 @@ class WebcamSetupDialog(QDialog):
         if saved and identities and all(identities.get(str(i)) in by_path for i in saved):
             saved = [by_path[identities[str(i)]] for i in saved]
         initial = list(manager.camera_indices) if manager else saved or available or [0, 1, 2, 3]
-        self._catalog = {device["index"]: device.get("name", "Camera") for device in devices}
+        self._catalog = {device["index"]: device.get("name", "Camera") for device in devices
+                         if self.owns_manager or device["index"] in initial}
         self._selected = list(initial)
         for source in initial:
             self._catalog.setdefault(source, "Camera")
@@ -348,6 +349,9 @@ class WebcamSetupDialog(QDialog):
         self.panel_layout.addWidget(self.stop_button)
         self.controls = None
         self.labels = []
+        self._tiles_by_source = {}
+        self._labels_by_source = {}
+        self._tile_aspect = None
         self.use_button = QPushButton("Save and continue" if self.owns_manager else "Save and close")
         self.use_button.clicked.connect(self.accept)
         self.cancel_button = QPushButton("Cancel")
@@ -372,19 +376,20 @@ class WebcamSetupDialog(QDialog):
         self.resize(1200, 760)
 
     def _rebuild_choices(self):
-        while self.checked_layout.count():
-            self.checked_layout.takeAt(0).widget().deleteLater()
-        self._checks_by_source = {}
-        self.checks = []
+        # Keep controls alive: removing/recreating them loses focus and click state.
         for source, name in self._catalog.items():
-            check = QCheckBox(f"Source {source}")
+            check = self._checks_by_source.get(source)
+            if check is None:
+                check = QCheckBox(f"Source {source}")
+                self.checked_layout.addWidget(check)
+                self._checks_by_source[source] = check
+                check.toggled.connect(self._selection_changed)
             check.setToolTip(name)
+            check.blockSignals(True)
             check.setChecked(source in self._selected)
+            check.blockSignals(False)
             check.setEnabled(self.owns_manager and not self.geometry_locked)
-            check.toggled.connect(self._selection_changed)
-            self.checked_layout.addWidget(check)
-            self._checks_by_source[source] = check
-            self.checks.append(check)
+        self.checks = list(self._checks_by_source.values())
 
     def _selection_changed(self, *_):
         checked = [source for source, check in self._checks_by_source.items() if check.isChecked()]
@@ -415,10 +420,14 @@ class WebcamSetupDialog(QDialog):
                        and not self._operation_error
                        and list(self.manager.camera_indices) == self._selected)
         self.use_button.setEnabled(matched and not busy and not self.selection_timer.isActive() and not self._closing)
+        if self.controls:
+            self.controls.setEnabled(not busy)
 
     def bind(self):
         if self.controls:
             self.controls.timer.stop()
+            self.controls.hide()
+            self.panel_layout.removeWidget(self.controls)
             self.controls.deleteLater()
             self.controls = None
         states = self.manager.get_settings_snapshot() if self.manager else []
@@ -428,21 +437,53 @@ class WebcamSetupDialog(QDialog):
         if self._preview_running and states:
             self.controls = WebcamControls(self.manager, geometry_locked=self.geometry_locked)
             self.panel_layout.addWidget(self.controls)
-        grid = self.grid.reset(len(states) if self._preview_running else 0)
-        self.labels = []
-        for i, state in enumerate(states if self._preview_running else []):
-            source = state["source"]
-            container = QWidget()
-            layout = QVBoxLayout(container)
-            layout.setContentsMargins(0, 0, 0, 0)
-            title = QLabel(f"Camera {i} · source {source}: {state.get('device_name') or 'Camera'}")
-            title.setWordWrap(True)
-            title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-            layout.addWidget(title)
-            preview = ImagePreview()
-            layout.addWidget(preview, 1)
-            grid.addWidget(container, i // self.grid.columns, i % self.grid.columns)
-            self.labels.append(preview)
+        # Allocate a permanent tile for every known source, including stopped ones.
+        # Rebuild the layout only when discovering new sources, not on toggles.
+        if set(self._catalog) != set(self._tiles_by_source):
+            containers = self._tiles_by_source
+            for source in self._catalog:
+                if source in containers:
+                    containers[source].setParent(self.grid)
+            grid = self.grid.reset(len(self._catalog))
+            for i, (source, name) in enumerate(self._catalog.items()):
+                if source not in containers:
+                    container = QWidget()
+                    layout = QVBoxLayout(container)
+                    layout.setContentsMargins(0, 0, 0, 0)
+                    title = QLabel(f"Source {source}: {name}")
+                    title.setWordWrap(True)
+                    title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+                    layout.addWidget(title)
+                    preview = ImagePreview()
+                    layout.addWidget(preview, 1)
+                    containers[source] = container
+                    self._labels_by_source[source] = preview
+                grid.addWidget(containers[source], i // self.grid.columns, i % self.grid.columns)
+                containers[source].show()
+        self.labels = list(self._labels_by_source.values())
+        self._refresh_previews()
+
+    def _refresh_previews(self):
+        if self.manager and self._want_running:
+            if hasattr(self.manager, "get_frames_by_source"):
+                frames = self.manager.get_frames_by_source()
+            else:
+                frames = dict(zip(self.manager.camera_indices, self.manager.get_all_frames()))
+        else:
+            frames = {}
+        for source, label in self._labels_by_source.items():
+            frame = frames.get(source) if source in self._selected else None
+            if frame is None:
+                label.clear()
+                label.setText("Camera stopped" if source not in self._selected or not self._want_running
+                              else "Starting camera…" if self._future is not None else "Camera unavailable")
+                continue
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w = rgb.shape[:2]
+            if self._tile_aspect is None:
+                self._tile_aspect = w / h
+                self.grid.set_image_aspect(self._tile_aspect)
+            label.setPixmap(QPixmap.fromImage(QImage(rgb.data, w, h, rgb.strides[0], QImage.Format_RGB888)))
 
     def select_checked(self):
         if not self.owns_manager or self.geometry_locked:
@@ -502,12 +543,20 @@ class WebcamSetupDialog(QDialog):
     @staticmethod
     def _open(old, indices, backend, carry):
         from unity_hand_tracking.webcam.multi_webcam import CameraManager
-        if old:
-            old.stop_all()
-        manager = CameraManager(indices, backend=backend)
+        if old and (backend == old.backend or backend == "auto" and old.backend == "dshow"):
+            manager = old
+            incremental = True
+        else:
+            if old:
+                old.stop_all()
+            manager = CameraManager(indices, backend=backend)
+            incremental = False
         manager.profile["cameras"].update(carry)
         try:
-            manager.start_all()
+            if incremental:
+                manager.reconfigure(indices, settings=carry)
+            else:
+                manager.start_all()
             missing = [i for i in indices if i not in manager.camera_indices]
             error = f"Sources unavailable: {missing}. Check connections/permissions or uncheck them." if missing else ""
             return manager, error
@@ -550,12 +599,7 @@ class WebcamSetupDialog(QDialog):
                 return
             if self._selection_pending:
                 self._apply_selection()
-        if self.manager and self._preview_running and self._future is None:
-            for frame, label in zip(self.manager.get_all_frames(), self.labels):
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                h, w = rgb.shape[:2]
-                self.grid.set_image_aspect(w / h)
-                label.setPixmap(QPixmap.fromImage(QImage(rgb.data, w, h, rgb.strides[0], QImage.Format_RGB888)))
+        self._refresh_previews()
 
     def accept(self):
         if self.manager is None or self._future is not None or self.selection_timer.isActive():
