@@ -46,9 +46,10 @@ class MediaPipeTrackerGUI(QMainWindow):
         if model == "wilor" and TrackingMode.parse(mode) is not TrackingMode.HANDS:
             raise ValueError("WiLoR supports hands only")
         self._model = model
-        self._wilor_options = dict(wilor_root=wilor_root, wilor_device=wilor_device,
-                                   wilor_fast=wilor_fast)
+        self._wilor_options = {"wilor_root": wilor_root, "wilor_device": wilor_device,
+                                   "wilor_fast": wilor_fast}
         self._restart_requested = False
+        self._settings_requested = False
         self.worker: PreviewWorker | None = None
         self._mode = TrackingMode.parse(mode)
         self._closing = False
@@ -92,6 +93,12 @@ class MediaPipeTrackerGUI(QMainWindow):
         self.toggle_button = QPushButton("Stop camera")
         self.toggle_button.clicked.connect(self._toggle)
         controls.addWidget(self.toggle_button)
+        self.camera_settings_button = QPushButton("USB camera setup…")
+        self.camera_settings_button.setEnabled(isinstance(self.source, int))
+        self.camera_settings_button.setToolTip(
+            "Configure USB cameras. Studio previews one source; calibrated multi-camera tracking uses --advanced-hands.")
+        self.camera_settings_button.clicked.connect(self._configure_camera)
+        controls.addWidget(self.camera_settings_button)
         controls.addStretch(1)
 
         self.status = QLabel()
@@ -135,6 +142,27 @@ class MediaPipeTrackerGUI(QMainWindow):
             self._stop()
         else:
             self._start()
+
+    def _configure_camera(self):
+        if self.worker is not None:
+            self._settings_requested = True
+            self.camera_settings_button.setEnabled(False)
+            self._stop()
+            return
+        from mavis_track._webcam_settings import CameraSetupCancelled
+        from unity_hand_tracking.webcam.multi_webcam import CameraManager
+        try:
+            manager = CameraManager.create_configured(keep_running=False)
+            self.source = manager.camera_indices[0]
+            self.status.setText(f"Saved webcam settings. Studio source: {self.source}.")
+        except CameraSetupCancelled:
+            self.status.setText("Camera setup cancelled.")
+        except Exception as exc:  # noqa: BLE001 - Report driver/setup failures without closing Studio.
+            self.status.setText(f"Camera setup: {exc}")
+        self.camera_settings_button.setEnabled(True)
+        self.mode_combo.setEnabled(self._model != "wilor")
+        self.model_combo.setEnabled(True)
+        self._start()
 
     def _change_model(self, *_):
         self._model = self.model_combo.currentData()
@@ -196,6 +224,9 @@ class MediaPipeTrackerGUI(QMainWindow):
             self.status.setText("WiLoR unavailable" if error and self._model == "wilor" else message)
             if self._closing:
                 self.close()
+            elif self._settings_requested:
+                self._settings_requested = False
+                self._configure_camera()
             elif self._restart_requested:
                 self._restart_requested = False
                 self._start()

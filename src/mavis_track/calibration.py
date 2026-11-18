@@ -1,5 +1,6 @@
 """Safe calibrated-camera state shared by the advanced camera backends."""
 
+import json
 import os
 import warnings
 from pathlib import Path
@@ -17,7 +18,7 @@ def default_calibration_dir(backend):
     return base / "mavis-track" / "calibration" / backend
 
 
-def load_camera_calibration(path, *, count, image_sizes=None, camera_ids=None, diagnostics=None):
+def load_camera_calibration(path, *, count, image_sizes=None, camera_ids=None, diagnostics=None, webcam_settings=None):
     data = load_npz(path)
     n = int(data.get("num_cameras", 0))
     if n <= 0 or n != count:
@@ -40,6 +41,40 @@ def load_camera_calibration(path, *, count, image_sizes=None, camera_ids=None, d
             raise ValueError("Connected camera UIDs do not match this calibration")
         order = [stored.index(uid) for uid in current]
         verified = True
+    elif webcam_settings is not None and "webcam_settings_json" in data:
+        stored_settings = json.loads(str(data["webcam_settings_json"].item()))
+        if (not isinstance(stored_settings, list) or len(stored_settings) != n or len(webcam_settings) != n
+                or any(not isinstance(state, dict) or not isinstance(state.get("actual"), dict)
+                       or not isinstance(state.get("capabilities", {}), dict)
+                       or not isinstance(state.get("device_path", ""), str)
+                       or type(state.get("source")) is not int
+                       for state in [*stored_settings, *webcam_settings])):
+            raise ValueError("Invalid webcam calibration metadata")
+        stored_paths = [state.get("device_path", "") for state in stored_settings]
+        current_paths = [state.get("device_path", "") for state in webcam_settings]
+        if all(stored_paths):
+            if len(set(stored_paths)) != n or set(stored_paths) != set(current_paths):
+                raise ValueError("Connected webcam device identities differ from calibration")
+            order = [stored_paths.index(path) for path in current_paths]
+            verified = True
+        else:
+            stored_sources = [state.get("source") for state in stored_settings]
+            current_sources = [state.get("source") for state in webcam_settings]
+            if len(set(stored_sources)) != n or set(stored_sources) != set(current_sources):
+                raise ValueError("Webcam source indices differ from calibration; verify USB camera order")
+            order = [stored_sources.index(source) for source in current_sources]
+            warnings.warn("Webcam identities are unverified; check source order before using 3D", RuntimeWarning)
+        from ._webcam_settings import geometry_signature
+        for index, state in enumerate(webcam_settings):
+            expected_state = stored_settings[order[index]]
+            saved_format = expected_state["actual"].get("fourcc")
+            if saved_format and saved_format != state["actual"].get("fourcc"):
+                raise ValueError("Webcam video format differs from calibration; restore the calibrated mode")
+            expected = geometry_signature(expected_state)
+            actual = geometry_signature(state)
+            if any(key not in actual or not np.isclose(value, actual[key], atol=.01, rtol=0)
+                   for key, value in expected.items()):
+                raise ValueError("Webcam focus/zoom differs from calibration; restore settings or recalibrate")
     elif camera_ids is not None and "camera_ids" in data:
         stored = data["camera_ids"].tolist()
         if len(set(stored)) != n or len(camera_ids) != n or set(stored) != set(camera_ids):

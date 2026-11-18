@@ -2,6 +2,7 @@
 
 import importlib
 import itertools
+import json
 import os
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ from handtrack.processing._calibration_solver import (
     solve_camera_pose_graph,
     validate_heldout_board_reconstruction,
 )
+from mavis_track._webcam_settings import CameraSetupCancelled
 
 # Populated from the explicitly selected backend by _load_backend.
 CALIBRATION_FILE: str | None = None
@@ -33,6 +35,7 @@ _image_sizes = None
 _diagnostics = None
 _reserved_indices = []
 _board_validation = None
+_webcam_settings = None
 MAX_BOARD_SHAPE_RMS_MM = 2.0
 MAX_BOARD_SCALE_ERROR_PERCENT = 2.0
 MAX_BOARD_PLANARITY_RMS_MM = 1.0
@@ -146,6 +149,8 @@ def save_calibration(num_cameras, img_size, num_captured, camera_matrices, dist_
             "calibration_type": "charuco", "stereo_error_metric": "joint_board_pose_point_rms",
             "charuco_square_length": CHARUCO_SQUARE_LENGTH,
             "charuco_marker_length": CHARUCO_MARKER_LENGTH}
+    if _webcam_settings is not None:
+        data["webcam_settings_json"] = json.dumps(_webcam_settings, allow_nan=False)
     if _diagnostics and all(item.get("uid") for item in _diagnostics):
         data["camera_uid_high"] = [item["uid"][0] for item in _diagnostics]
         data["camera_uid_low"] = [item["uid"][1] for item in _diagnostics]
@@ -230,7 +235,7 @@ def save_calibration(num_cameras, img_size, num_captured, camera_matrices, dist_
             "Hold the board still for each capture, vary its angle/position between captures, "
             "and check board dimensions and camera mounting.")
     from mavis_track.calibration import load_camera_calibration
-    load_camera_calibration(candidate, count=num_cameras, image_sizes=data["image_sizes"], camera_ids=data["camera_ids"], diagnostics=_diagnostics)
+    load_camera_calibration(candidate, count=num_cameras, image_sizes=data["image_sizes"], camera_ids=data["camera_ids"], diagnostics=_diagnostics, webcam_settings=_webcam_settings)
     backup = destination.parent / ("calib_backup_" + datetime.now().strftime("%Y%m%d_%H%M%S_%f") + ".npz")
     if destination.exists():
         backup.write_bytes(destination.read_bytes())
@@ -241,16 +246,17 @@ def save_calibration(num_cameras, img_size, num_captured, camera_matrices, dist_
 
 
 def main(backend):
-    global _camera_ids, _image_sizes, _diagnostics, _intrinsic_results, _stereo_results, _reserved_indices, _board_validation
+    global _camera_ids, _image_sizes, _diagnostics, _intrinsic_results, _stereo_results, _reserved_indices, _board_validation, _webcam_settings
     manager_class = _load_backend(backend)
     original = "webcam" if backend == "webcam" else "optitrack_cam_py"
     module = importlib.import_module(f"unity_hand_tracking.{original}.calibration")
-    _camera_ids = _image_sizes = _diagnostics = None
+    _camera_ids = _image_sizes = _diagnostics = _webcam_settings = None
     _intrinsic_results, _stereo_results = [], []
     _reserved_indices, _board_validation = [], None
     managers = []
     def create_manager(*args, **kwargs):
-        manager = manager_class(*args, **kwargs)
+        manager = (manager_class.create_configured(calibration=True) if backend == "webcam"
+                   and hasattr(manager_class, "create_configured") else manager_class(*args, **kwargs))
         managers.append(manager)
         return manager
     def solve_intrinsics(*args, **kwargs):
@@ -266,7 +272,10 @@ def main(backend):
         return calibrate_intrinsics(*args, **kwargs)
     saved = False
     def publish(*args, **kwargs):
+        global _webcam_settings
         nonlocal saved
+        if managers and hasattr(managers[-1], "get_settings_snapshot"):
+            _webcam_settings = managers[-1].get_settings_snapshot()
         save_calibration(*args, **kwargs)
         saved = True
     replacements = {"CameraManager": create_manager, "calibrate_intrinsics": solve_intrinsics,
@@ -279,7 +288,7 @@ def main(backend):
     try:
         module._capture_main()
         return 0 if saved else 1
-    except CalibrationQualityError as exc:
+    except (CalibrationQualityError, CameraSetupCancelled) as exc:
         print(str(exc))
         return 1
     finally:

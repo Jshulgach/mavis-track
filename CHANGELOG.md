@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Add model-independent Windows USB webcam setup with source previews/selection,
+  native driver control ranges, auto/manual exposure and focus, gain/white balance,
+  requested-versus-actual video modes, and local camera profiles.
+- Move the real webcam calibration entrypoint onto staged shared capture with
+  observation replay. Keep mode/lens controls locked during capture and retain
+  camera/lens metadata to reject incompatible 3D calibration.
+- Reuse webcam settings in Studio and advanced multi-camera tracking; retain
+  2D previews without calibration and fit the advanced webcam window to the screen.
+
+
 ## mavis-track 0.2.0 - 2026-11-17
 
 - Recover calibration capture tuning, manual capture and corner-motion diagnostics; keep small-screen video visible with scrollable controls and use the configured backend exposure at startup.

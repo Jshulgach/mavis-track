@@ -46,7 +46,7 @@ def _collect(module, manager, preview, executor, detectors, session, checkpoint)
             gate.reset()
             session.active_target = target
         ready = (target is not None and (controls.capture_ready or
-                 (manual and time.monotonic() - controls.last_change >= .35))
+                 (manual and controls.settings_ready))
                  and batch_started >= controls.last_change)
         guidance = ''
         if ready:
@@ -202,7 +202,12 @@ def run_capture(module):
         manager.start_all(exposure=initial_exposure)
         if hasattr(manager, 'wait_ready'):
             manager.wait_ready()
+        if hasattr(manager, "lock_geometry"):
+            manager.lock_geometry()
         count = manager.num_cameras
+        sizes = [manager.get_resolution(i) for i in range(count)]
+        if any(size != sizes[0] for size in sizes):
+            raise ValueError("Choose the same actual webcam resolution before calibration")
         image_size = manager.get_resolution(0)
         preview = create_calibration_preview(
             manager, 'ChArUco Calibration', initial_exposure if initial_exposure is not None else 10)

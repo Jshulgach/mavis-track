@@ -1,11 +1,11 @@
 """Capture bookkeeping for individual lenses followed by overlapping camera pairs."""
 import itertools
+import json
 import os
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-
 
 MIN_STAGE_CAPTURES = 20
 
@@ -84,14 +84,16 @@ class CalibrationSession:
     def write_observations(self, path, module, manager, board, dictionary,
                            matrices=None, dists=None):
         """Persist numeric arrays, including missing views, without pickle."""
-        data = dict(schema_version=1, phase=self.phase, dictionary=dictionary,
-                    num_cameras=self.count, target_captures=self.target,
-                    image_sizes=[manager.get_resolution(i) for i in range(self.count)],
-                    camera_ids=getattr(manager, 'camera_indices', list(range(self.count))),
-                    board_points=board.getChessboardCorners(),
-                    charuco_square_length=module.CHARUCO_SQUARE_LENGTH,
-                    charuco_marker_length=module.CHARUCO_MARKER_LENGTH,
-                    reserved_view_indices=np.asarray(self.reserved_indices, dtype=int))
+        data = {'schema_version': 1, 'phase': self.phase, 'dictionary': dictionary,
+                    'num_cameras': self.count, 'target_captures': self.target,
+                    'image_sizes': [manager.get_resolution(i) for i in range(self.count)],
+                    'camera_ids': getattr(manager, 'camera_indices', list(range(self.count))),
+                    'board_points': board.getChessboardCorners(),
+                    'charuco_square_length': module.CHARUCO_SQUARE_LENGTH,
+                    'charuco_marker_length': module.CHARUCO_MARKER_LENGTH,
+                    'reserved_view_indices': np.asarray(self.reserved_indices, dtype=int)}
+        if hasattr(manager, 'get_settings_snapshot'):
+            data["webcam_settings_json"] = json.dumps(manager.get_settings_snapshot(), allow_nan=False)
         if hasattr(manager, 'get_camera_diagnostics'):
             diagnostics = manager.get_camera_diagnostics()
             data['camera_serials'] = np.asarray([str(d.get('serial', '')) for d in diagnostics])

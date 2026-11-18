@@ -30,7 +30,7 @@ class CaptureCountdown:
 
 
 class CalibrationControls:
-    """SDK exposure values use the same 1..480 range as the OptiTrack GUI."""
+    """Use SDK units for OptiTrack and driver-reported units for webcams."""
     instructions = (
         'Up/Down: exposure   Shift: step 10   0-9: select camera   A: all cameras',
         'I/K: IR intensity   M: max available light   H: high power',
@@ -42,7 +42,15 @@ class CalibrationControls:
 
     def __init__(self, manager, initial_exposure=10):
         self.manager = manager
-        self.exposures = [initial_exposure] * manager.num_cameras
+        self.webcam = getattr(manager, "backend_kind", "") == "webcam"
+        self.exposures = ([state["actual"].get("exposure") for state in manager.get_settings_snapshot()]
+                          if self.webcam else [initial_exposure] * manager.num_cameras)
+        if self.webcam:
+            self.instructions = (
+                "Up/Down: exposure in driver units   Shift: step 10   0-9: camera   A: all",
+                "Use Camera controls for auto exposure, gain and white balance.",
+                *self.instructions[2:],
+            )
         self.selected = None
         self.paused = False
         self.finished = False
@@ -63,7 +71,12 @@ class CalibrationControls:
 
     @property
     def capture_ready(self):
-        return not self.paused and time.monotonic()-self.last_change >= .35
+        return not self.paused and self.settings_ready
+
+    @property
+    def settings_ready(self):
+        return (time.monotonic()-self.last_change >= .35
+                and (not self.webcam or not any(state["pending"] for state in self.manager.get_settings_snapshot())))
 
     def handle_key(self, key, shift=False):
         tuning = {'[': ('motion_px', -.5), ']': ('motion_px', .5),
@@ -77,7 +90,7 @@ class CalibrationControls:
         elif key in ('up', 'down'):
             step = 10 if shift else 1
             self.adjust(step if key == 'up' else -step)
-        elif key in ('i','k','m','h'):
+        elif key in ('i','k','m','h') and not self.webcam:
             self.adjust_lighting(key)
         elif key == 'a':
             self.selected = None
@@ -128,6 +141,26 @@ class CalibrationControls:
         self.last_error = '; '.join(self.lighting.errors)
 
     def adjust(self, delta):
+        if self.webcam:
+            states = self.manager.get_settings_snapshot()
+            targets = range(len(states)) if self.selected is None else [self.selected]
+            errors = []
+            for index in targets:
+                state = states[index]
+                current = state["actual"].get("exposure")
+                capability = state.get("capabilities", {}).get("exposure", {})
+                try:
+                    if current is None:
+                        raise ValueError("Exposure readback is unavailable")
+                    requested = current + delta * capability.get("step", 1)
+                    if "minimum" in capability:
+                        requested = max(capability["minimum"], min(capability["maximum"], requested))
+                    self.manager.request_settings([index], {"auto_exposure": False, "exposure": requested})
+                    self._lighting_changed()
+                except (ValueError, RuntimeError) as exc:
+                    errors.append(f"Camera {index}: {exc}")
+            self.last_error = "; ".join(errors)
+            return
         targets = range(len(self.exposures)) if self.selected is None else [self.selected]
         self.last_error = ''
         for index in targets:
@@ -153,6 +186,12 @@ class CalibrationControls:
         return self.countdown.text(time.monotonic())
 
     def description(self):
+        if self.webcam:
+            values = "; ".join(
+                f"C{i} / src {state['source']}: exposure {state['actual'].get('exposure')} "
+                f"(auto {state['actual'].get('auto_exposure')})"
+                for i, state in enumerate(self.manager.get_settings_snapshot()))
+            return "Webcam readback (driver units): " + values
         target = 'all cameras' if self.selected is None else f'camera {self.selected}'
         values = '   '.join(f'C{i}: {value}' for i, value in enumerate(self.exposures))
         state = 'PAUSED' if self.paused else 'Auto-capture'

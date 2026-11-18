@@ -44,10 +44,13 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QPushButton,
     QScrollArea,
+    QSplitter,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
+
+from handtrack.applications._display import CameraGrid, ImagePreview, configure_high_dpi, fit_window_to_screen
 
 # Optional: use LSL local_clock for tighter time sync
 try:
@@ -238,22 +241,26 @@ class StereoHandTrackerGUI(QMainWindow):
         self.main_layout.setContentsMargins(6, 6, 6, 6)
         self.main_layout.setSpacing(6)
         # Video displays (left side) - dynamic grid
-        self.video_widget = QWidget()
-        self.video_layout = QGridLayout(self.video_widget)
+        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.setChildrenCollapsible(False)
+        self.main_layout.addWidget(self.splitter)
+        self.video_widget = CameraGrid()
+        self.video_widget.setMinimumSize(160, 120)
+        self.video_layout = self.video_widget.reset(0)
         self.video_layout.setSpacing(5)
         self.video_layout.setContentsMargins(0, 0, 0, 0)
         self.video_labels = []
         # We will populate video_labels dynamically when cameras are initialized
-        self.main_layout.addWidget(self.video_widget)
+        self.splitter.addWidget(self.video_widget)
         # 3D Visualization Widget (hidden by default)
         self.vis_3d_label = QLabel()
-        self.vis_3d_label.setMinimumSize(350, 350)
+        self.vis_3d_label.setMinimumSize(160, 120)
         self.vis_3d_label.setStyleSheet(
             "background-color: #000; border: 1px solid #555;"
         )
         self.vis_3d_label.setAlignment(Qt.AlignCenter)
         self.vis_3d_label.hide()
-        self.main_layout.addWidget(self.vis_3d_label)
+        self.splitter.addWidget(self.vis_3d_label)
         # Control panel (right side)
         control_panel = self.create_control_panel()
         self.control_scroll_area = QScrollArea()
@@ -263,7 +270,11 @@ class StereoHandTrackerGUI(QMainWindow):
         self.control_scroll_area.setStyleSheet(
             "QScrollArea { border: none; background-color: #2d2d2d; }"
         )
-        self.main_layout.addWidget(self.control_scroll_area)
+        self.splitter.addWidget(self.control_scroll_area)
+        self.splitter.setSizes([850, 0, 360])
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(2, 0)
+        fit_window_to_screen(self)
 
     def _choose_grid_cols(self, num_cameras):
         """Choose columns that prioritize zero empty slots, then squareness."""
@@ -292,40 +303,19 @@ class StereoHandTrackerGUI(QMainWindow):
         return best_cols
 
     def _fit_window_to_camera_grid(self, frame_w, frame_h, cols):
-        """Resize labels and window to wrap tightly around the active camera grid."""
-        if self.num_cameras <= 0:
-            return
-
-        rows = math.ceil(self.num_cameras / cols)
-        spacing = self.video_layout.spacing()
-
-        for label in self.video_labels:
-            label.setFixedSize(frame_w, frame_h)
-
-        grid_w = cols * frame_w + max(0, cols - 1) * spacing
-        grid_h = rows * frame_h + max(0, rows - 1) * spacing
-
-        # Small margins for layout/frame chrome.
-        video_w = grid_w + 20
-        video_h = grid_h + 20
-        panel_w = self.control_scroll_area.minimumWidth() + 40
-        target_w = video_w + panel_w + 40
-        target_h = video_h + 80
-
-        self.video_widget.setFixedSize(video_w, video_h)
-        self.resize(target_w, target_h)
-        self.adjustSize()
+        self.video_widget.set_image_aspect(frame_w / max(frame_h, 1))
+        fit_window_to_screen(self)
 
     def create_control_panel(self):
         """Create the right-side control panel."""
         panel = QFrame()
         panel.setStyleSheet("""
             QFrame { background-color: #2d2d2d; border-radius: 6px; }
-            QLabel { color: #ffffff; font-size: 11px; }
+            QLabel { color: #ffffff; font-size: 11pt; }
             QGroupBox {
                 color: #ffffff;
                 font-weight: bold;
-                font-size: 11px;
+                font-size: 11pt;
                 border: 1px solid #444;
                 border-radius: 4px;
                 margin-top: 6px;
@@ -343,18 +333,18 @@ class StereoHandTrackerGUI(QMainWindow):
                 padding: 5px 10px;
                 border-radius: 3px;
                 font-weight: bold;
-                font-size: 11px;
+                font-size: 11pt;
             }
             QPushButton:hover { background-color: #1084d8; }
             QPushButton:pressed { background-color: #006abc; }
             QPushButton:disabled { background-color: #555; color: #888; }
-            QCheckBox { color: #ffffff; font-size: 11px; }
+            QCheckBox { color: #ffffff; font-size: 11pt; }
             QSpinBox, QDoubleSpinBox {
                 background-color: #3d3d3d;
                 color: #ffffff;
                 border: 1px solid #555;
                 padding: 2px;
-                font-size: 11px;
+                font-size: 11pt;
             }
         """)
         layout = QVBoxLayout(panel)
@@ -373,23 +363,23 @@ class StereoHandTrackerGUI(QMainWindow):
         status_row = QHBoxLayout()
         status_row.setSpacing(4)
         self.frame_label = QLabel("Frames: 0")
-        self.frame_label.setStyleSheet("font-size: 10px; color: #aaa;")
+        self.frame_label.setStyleSheet("font-size: 11pt; color: #aaa;")
         self.hands_label = QLabel("Hands: 0")
-        self.hands_label.setStyleSheet("font-size: 10px; color: #aaa;")
+        self.hands_label.setStyleSheet("font-size: 11pt; color: #aaa;")
         self.tracked_hand_label = QLabel("Hand: N/A")
-        self.tracked_hand_label.setStyleSheet("font-size: 10px; color: #aaa;")
+        self.tracked_hand_label.setStyleSheet("font-size: 11pt; color: #aaa;")
         status_row.addWidget(self.frame_label)
         status_row.addWidget(self.hands_label)
         status_row.addWidget(self.tracked_hand_label)
         control_layout.addLayout(status_row)
         self.fps_label = QLabel("FPS: 0.0")
         self.fps_label.setStyleSheet(
-            "color: #00ff00; font-weight: bold; font-size: 11px;"
+            "color: #00ff00; font-weight: bold; font-size: 11pt;"
         )
         self.fps_label.setAlignment(Qt.AlignCenter)
         control_layout.addWidget(self.fps_label)
         self.timing_label = QLabel("Capture: 0ms | Detect: 0ms | Tri: 0ms")
-        self.timing_label.setStyleSheet("color: #aaa; font-size: 9px;")
+        self.timing_label.setStyleSheet("color: #aaa; font-size: 11pt;")
         self.timing_label.setAlignment(Qt.AlignCenter)
         control_layout.addWidget(self.timing_label)
         layout.addWidget(control_group)
@@ -399,44 +389,13 @@ class StereoHandTrackerGUI(QMainWindow):
         self.camera_info_label = QLabel("Cameras: \u2014")
         self.camera_info_label.setStyleSheet("color: #aaa;")
         camera_layout.addWidget(self.camera_info_label)
-        # Per-camera exposure controls
-        exp_title = QLabel("Per-Camera Exposure & Triangulation")
-        exp_title.setStyleSheet("color: #ccc; font-weight: bold; margin-top: 6px;")
-        camera_layout.addWidget(exp_title)
-        self.exposure_spinboxes = []
-        self.cam_enabled_checkboxes = []
+        self.webcam_settings_button = QPushButton("USB camera settings…")
+        self.webcam_settings_button.clicked.connect(self._open_webcam_settings)
+        camera_layout.addWidget(self.webcam_settings_button)
         self.exposure_grid = QGridLayout()
-        self.exposure_grid.setSpacing(4)
-        # Header row
-        hdr_use = QLabel("Tri")
-        hdr_use.setStyleSheet("color: #888; font-size: 10px;")
-        hdr_use.setAlignment(Qt.AlignCenter)
-        self.exposure_grid.addWidget(hdr_use, 0, 0)
-        hdr_cam = QLabel("Camera")
-        hdr_cam.setStyleSheet("color: #888; font-size: 10px;")
-        self.exposure_grid.addWidget(hdr_cam, 0, 1)
-        hdr_exp = QLabel("Exposure")
-        hdr_exp.setStyleSheet("color: #888; font-size: 10px;")
-        self.exposure_grid.addWidget(hdr_exp, 0, 2)
-        # We will populate the grid dynamically when cameras are initialized
+        self.exposure_grid.addWidget(QLabel("Triangulate"), 0, 0)
+        self.exposure_grid.addWidget(QLabel("Camera source"), 0, 1)
         camera_layout.addLayout(self.exposure_grid)
-        # "Set all" convenience row
-        apply_all_row = QHBoxLayout()
-        apply_all_label = QLabel("Set all:")
-        apply_all_label.setStyleSheet("color: #aaa; font-size: 11px;")
-        self.exposure_all_spin = QSpinBox()
-        self.exposure_all_spin.setRange(1, 480)
-        self.exposure_all_spin.setValue(self.default_exposure)
-        self.exposure_all_spin.setSuffix(" ms")
-        apply_all_btn = QPushButton("Apply")
-        apply_all_btn.setStyleSheet(
-            "padding: 4px 10px; font-size: 11px; background-color: #555;"
-        )
-        apply_all_btn.clicked.connect(self._on_apply_all_exposure)
-        apply_all_row.addWidget(apply_all_label)
-        apply_all_row.addWidget(self.exposure_all_spin)
-        apply_all_row.addWidget(apply_all_btn)
-        camera_layout.addLayout(apply_all_row)
         layout.addWidget(camera_group)
         # ---- Processing Options ----
         processing_group = QGroupBox("Processing")
@@ -585,7 +544,7 @@ class StereoHandTrackerGUI(QMainWindow):
         ema_grid.addWidget(self.ema1d_alpha_spin, 0, 3)
         smooth_layout.addLayout(ema_grid)
         self.jitter_label = QLabel("Jitter: N/A")
-        self.jitter_label.setStyleSheet("font-size: 10px; color: #aaa;")
+        self.jitter_label.setStyleSheet("font-size: 11pt; color: #aaa;")
         smooth_layout.addWidget(self.jitter_label)
         self.overlay_checkbox = QCheckBox("Overlay raw vs filtered")
         self.overlay_checkbox.toggled.connect(self.on_overlay_toggled)
@@ -628,10 +587,10 @@ class StereoHandTrackerGUI(QMainWindow):
         ports_info = QLabel(
             f"Landmarks: {UDP_PORT_LANDMARKS}\nAngles: {UDP_PORT_ANGLES}"
         )
-        ports_info.setStyleSheet("color: #aaa; font-size: 10px;")
+        ports_info.setStyleSheet("color: #aaa; font-size: 11pt;")
         udp_layout.addWidget(ports_info)
         self.lsl_info = QLabel("LSL: StereoHandTracker_Landmarks / _Angles")
-        self.lsl_info.setStyleSheet("color: #aaa; font-size: 10px;")
+        self.lsl_info.setStyleSheet("color: #aaa; font-size: 11pt;")
         udp_layout.addWidget(self.lsl_info)
         self.udp_status = QLabel("Broadcasting: Disabled")
         self.udp_status.setStyleSheet("color: #888;")
@@ -639,7 +598,7 @@ class StereoHandTrackerGUI(QMainWindow):
         layout.addWidget(udp_group)
         # Instructions
         instructions = QLabel("Press ESC to quit")
-        instructions.setStyleSheet("color: #666; font-size: 10px;")
+        instructions.setStyleSheet("color: #666; font-size: 11pt;")
         instructions.setAlignment(Qt.AlignCenter)
         layout.addWidget(instructions)
         layout.addStretch()
@@ -653,17 +612,19 @@ class StereoHandTrackerGUI(QMainWindow):
     # ------------------------------------------------------------------ #
     # Exposure callbacks
     # ------------------------------------------------------------------ #
-    def _on_exposure_changed(self, cam_index, value):
-        """Called when an individual camera exposure spinbox changes."""
-        if self.tracker and cam_index < self.num_cameras:
-            self.tracker.set_exposure(cam_index, value)
-            print(f"[GUI] Camera {cam_index} exposure -> {value}")
-
-    def _on_apply_all_exposure(self):
-        """Set all camera exposure spinboxes to the 'Set all' value."""
-        val = self.exposure_all_spin.value()
-        for spin in self.exposure_spinboxes:
-            spin.setValue(val)  # triggers _on_exposure_changed per camera
+    def _open_webcam_settings(self):
+        from mavis_track._webcam_settings import CameraSetupCancelled
+        try:
+            if self.is_running and self.tracker is not None:
+                from handtrack.applications._webcam_qt import show_webcam_settings
+                show_webcam_settings(self.tracker.cam_mgr, self, geometry_locked=True)
+            else:
+                from unity_hand_tracking.webcam.multi_webcam import CameraManager
+                CameraManager.create_configured(keep_running=False)
+        except CameraSetupCancelled:
+            pass
+        except Exception as exc:
+            self.status_label.setText(f"Camera setup: {exc}")
 
     def _on_cam_enabled_toggled(self, cam_index, checked):
         """Called when a per-camera triangulation checkbox changes."""
@@ -1036,13 +997,12 @@ class StereoHandTrackerGUI(QMainWindow):
             for i in reversed(range(self.video_layout.count())):
                 self.video_layout.itemAt(i).widget().setParent(None)
             self.video_labels = []
-
-            cols = self._choose_grid_cols(self.num_cameras)
+            self.video_layout = self.video_widget.reset(self.num_cameras)
+            cols = self.video_widget.columns
             frame_w = int(getattr(self.tracker, "img_width", 640) or 640)
             frame_h = int(getattr(self.tracker, "img_height", 480) or 480)
             for idx in range(self.num_cameras):
-                label = QLabel()
-                label.setMinimumSize(frame_w, frame_h)
+                label = ImagePreview()
                 label.setStyleSheet(
                     "background-color: #1a1a1a; border: 2px solid #333;"
                 )
@@ -1052,50 +1012,23 @@ class StereoHandTrackerGUI(QMainWindow):
 
             self._fit_window_to_camera_grid(frame_w, frame_h, cols)
 
-            # Dynamically populate exposure grid
-            for i in reversed(range(self.exposure_grid.count())):
-                widget = self.exposure_grid.itemAt(i).widget()
-                if widget and widget not in [
-                    self.exposure_grid.itemAt(0).widget(),
-                    self.exposure_grid.itemAt(1).widget(),
-                    self.exposure_grid.itemAt(2).widget(),
-                ]:
-                    widget.setParent(None)
-
+            # Camera selection controls no longer force OptiTrack exposure units.
+            while self.exposure_grid.count():
+                item = self.exposure_grid.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+            self.exposure_grid.addWidget(QLabel("Triangulate"), 0, 0)
+            self.exposure_grid.addWidget(QLabel("Camera source"), 0, 1)
             self.exposure_spinboxes = []
             self.cam_enabled_checkboxes = []
             self.enabled_cameras = set(range(self.num_cameras))
-
-            for idx in range(self.num_cameras):
+            for idx, source in enumerate(self.tracker.camera_ids):
                 cb = QCheckBox()
                 cb.setChecked(True)
-                cb.setToolTip(f"Include camera {idx} in triangulation")
-                cb.toggled.connect(
-                    lambda checked, i=idx: self._on_cam_enabled_toggled(i, checked)
-                )
+                cb.toggled.connect(lambda checked, i=idx: self._on_cam_enabled_toggled(i, checked))
                 self.cam_enabled_checkboxes.append(cb)
-                lbl = QLabel(f"Cam {idx}")
-                lbl.setStyleSheet("color: #aaa; font-size: 11px;")
-                spin = QSpinBox()
-                spin.setRange(1, 480)
-                spin.setValue(self.default_exposure)
-                spin.setSuffix(" ms")
-                spin.setToolTip(
-                    f"Exposure for camera {idx}.\n"
-                    "Lower = faster/darker, Higher = slower/brighter."
-                )
-                spin.valueChanged.connect(
-                    lambda val, i=idx: self._on_exposure_changed(i, val)
-                )
-                self.exposure_spinboxes.append(spin)
-                row = idx + 1  # row 0 is header
-                self.exposure_grid.addWidget(cb, row, 0, Qt.AlignCenter)
-                self.exposure_grid.addWidget(lbl, row, 1)
-                self.exposure_grid.addWidget(spin, row, 2)
-
-            # Apply current exposure spinbox values to each camera
-            for idx in range(min(self.num_cameras, len(self.exposure_spinboxes))):
-                self.tracker.set_exposure(idx, self.exposure_spinboxes[idx].value())
+                self.exposure_grid.addWidget(cb, idx + 1, 0)
+                self.exposure_grid.addWidget(QLabel(f"Camera {idx} / source {source}"), idx + 1, 1)
             # Apply current triangulation camera selection
             self.tracker.set_enabled_cameras(set(self.enabled_cameras))
             # Ensure LSL outlet exists even if UDP toggle is off
@@ -1113,7 +1046,11 @@ class StereoHandTrackerGUI(QMainWindow):
             self.is_running = True
             self.start_btn.setText("Stop Tracking")
             self.start_btn.setStyleSheet("background-color: #d43333;")
-            self.status_label.setText("Status: Running")
+            self.status_label.setText(getattr(self.tracker, "calibration_status", "Running"))
+            available = getattr(self.tracker, "calibration_available", True)
+            self.show_3d_checkbox.setEnabled(available)
+            if not available:
+                self.show_3d_checkbox.setChecked(False)
             self.status_label.setStyleSheet("color: #44ff44;")
             # Start background processing thread
             self._proc_thread = ProcessingThread(self.tracker)
@@ -1655,7 +1592,8 @@ def main():
 
     parser = argparse.ArgumentParser(description="Stereo Hand Tracker")
     parser.parse_args()
-    app = QApplication(sys.argv)
+    configure_high_dpi()
+    app = QApplication.instance() or QApplication(sys.argv)
     app.setStyle("Fusion")
     palette = app.palette()
     palette.setColor(QPalette.Window, QColor(30, 30, 30))

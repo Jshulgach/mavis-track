@@ -241,3 +241,9 @@ separate from camera backend. The OptiTrack grid shares one WiLoR model across
 the feeds and retains exposure/IR controls.
 See [multi-camera setup and validation status](wilor.md#optitrack-multi-camera-gui).
 Calibrated reconstruction remains separate from independent WiLoR camera models.
+
+## Windows USB webcam setup
+
+See [USB webcams](webcams.md) for source selection, native driver controls,
+video modes, shared staged calibration and saved settings. The default webcam
+Studio previews one source; use the advanced webcam GUI for calibrated multi-camera hands.

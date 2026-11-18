@@ -35,7 +35,7 @@ class PreviewWorker(threading.Thread):
         if model == "wilor" and TrackingMode.parse(mode) is not TrackingMode.HANDS:
             raise ValueError("WiLoR supports hands only")
         self.model = model
-        self._wilor_options = dict(root=wilor_root, device=wilor_device, fast=wilor_fast)
+        self._wilor_options = {"root": wilor_root, "device": wilor_device, "fast": wilor_fast}
         self._lock = threading.Lock()
         self._stop_requested = threading.Event()
         self._mode = TrackingMode.parse(mode)
@@ -68,9 +68,32 @@ class PreviewWorker(threading.Thread):
     def run(self):
         capture = tracker = None
         try:
-            capture = cv2.VideoCapture(self.source)
+            settings = {}
+            if isinstance(self.source, int):
+                from mavis_track._webcam_settings import load_profile, open_webcam
+                profile = load_profile()
+                if self.source in profile["indices"]:
+                    from mavis_track._webcam_windows import (
+                        apply_controls,
+                        enumerate_devices,
+                    )
+                    expected = profile.get("identities", {}).get(str(self.source))
+                    if expected and not any(device["index"] == self.source and device["device_path"] == expected
+                                            for device in enumerate_devices()):
+                        raise RuntimeError("Webcam identity changed; reopen USB camera setup")
+                    capture = open_webcam(self.source, profile["backend"], factory=cv2.VideoCapture)
+                    settings = profile["cameras"].get(str(self.source), {})
+            if capture is None:
+                capture = cv2.VideoCapture(self.source)
             if not capture.isOpened():
                 raise RuntimeError(f"Unable to open camera source {self.source!r}")
+            if settings:
+                from mavis_track._webcam_settings import apply_settings
+                _, errors, _ = apply_settings(capture, settings, native=lambda values: apply_controls(self.source, values))
+                if errors:
+                    raise RuntimeError("Saved webcam settings could not be restored: " + "; ".join(errors.values()))
+                for _ in range(4):
+                    capture.read()
             if not isinstance(self.source, str):
                 capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             if self.model == "wilor":

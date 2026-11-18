@@ -116,21 +116,31 @@ class CalibrationPreview(QMainWindow):
         self.exposure_status = QLabel()
         self.exposure_status.setWordWrap(True)
         layout.addWidget(self.exposure_status)
-        self.illumination = IlluminationPanel(controls.lighting, keyboard_focus=False)
-        self.illumination.target.currentIndexChanged.connect(self._lighting_target_changed)
-        # Stack the shared illumination controls within the narrow sidebar.
-        lighting_grid = self.illumination.layout()
-        for widget in (self.illumination.target, self.illumination.level,
-                       self.illumination.apply_button, self.illumination.high_power,
-                       self.illumination.max_button, self.illumination.status):
-            lighting_grid.removeWidget(widget)
-        lighting_grid.addWidget(self.illumination.target, 0, 0, 1, 2)
-        lighting_grid.addWidget(self.illumination.level, 1, 0)
-        lighting_grid.addWidget(self.illumination.apply_button, 1, 1)
-        lighting_grid.addWidget(self.illumination.high_power, 2, 0, 1, 2)
-        lighting_grid.addWidget(self.illumination.max_button, 3, 0, 1, 2)
-        lighting_grid.addWidget(self.illumination.status, 4, 0, 1, 2)
-        layout.addWidget(self.illumination)
+        self.webcam_controls = None
+        self.illumination = None
+        if controls.webcam:
+            from ._webcam_qt import WebcamControls
+            self.webcam_controls = WebcamControls(
+                controls.manager, geometry_locked=True, changed=controls._lighting_changed)
+            self.webcam_controls.target.currentIndexChanged.connect(
+                lambda: setattr(controls, "selected", self.webcam_controls.target.currentData()))
+            layout.addWidget(self.webcam_controls)
+        else:
+            self.illumination = IlluminationPanel(controls.lighting, keyboard_focus=False)
+            self.illumination.target.currentIndexChanged.connect(self._lighting_target_changed)
+            # Stack the shared illumination controls within the narrow sidebar.
+            lighting_grid = self.illumination.layout()
+            for widget in (self.illumination.target, self.illumination.level,
+                           self.illumination.apply_button, self.illumination.high_power,
+                           self.illumination.max_button, self.illumination.status):
+                lighting_grid.removeWidget(widget)
+            lighting_grid.addWidget(self.illumination.target, 0, 0, 1, 2)
+            lighting_grid.addWidget(self.illumination.level, 1, 0)
+            lighting_grid.addWidget(self.illumination.apply_button, 1, 1)
+            lighting_grid.addWidget(self.illumination.high_power, 2, 0, 1, 2)
+            lighting_grid.addWidget(self.illumination.max_button, 3, 0, 1, 2)
+            lighting_grid.addWidget(self.illumination.status, 4, 0, 1, 2)
+            layout.addWidget(self.illumination)
         grid = self.camera_grid.reset(len(controls.exposures))
         self.labels = []
         for index in range(len(controls.exposures)):
@@ -174,8 +184,11 @@ class CalibrationPreview(QMainWindow):
         key = keys.get(event.key(),event.text().lower())
         if key and self.controls.handle_key(key,bool(event.modifiers() & Qt.ShiftModifier)):
             self._update_exposure_text()
-            self.illumination.set_target(self.controls.selected)
-            if key in ('i','k','m','h'):
+            if self.webcam_controls is not None:
+                self.webcam_controls.set_target(self.controls.selected)
+            elif self.illumination is not None:
+                self.illumination.set_target(self.controls.selected)
+            if self.illumination is not None and key in ('i','k','m','h'):
                 self.illumination.refresh()
             event.accept()
         else:

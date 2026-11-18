@@ -1,5 +1,6 @@
 """Recompute a calibration from saved observations without opening cameras."""
 import argparse
+import json
 from itertools import pairwise
 from pathlib import Path
 from types import SimpleNamespace
@@ -121,6 +122,8 @@ def replay_calibration(observations, output):
     state = {'_camera_ids': data['camera_ids'], '_image_sizes': sizes,
              '_diagnostics': None, '_intrinsic_results': [], '_stereo_results': [],
              '_reserved_indices': [], '_board_validation': None,
+             '_webcam_settings': (json.loads(str(data['webcam_settings_json'].item()))
+                                  if 'webcam_settings_json' in data else None),
              'CALIBRATION_FILE': str(destination),
              'CHARUCO_SQUARE_LENGTH': float(data['charuco_square_length']),
              'CHARUCO_MARKER_LENGTH': float(data['charuco_marker_length'])}
