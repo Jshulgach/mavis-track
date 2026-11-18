@@ -263,7 +263,7 @@ class WebcamControls(QWidget):
 
 
 class WebcamSetupDialog(QDialog):
-    """Preview/select sources asynchronously, then retain the configured manager."""
+    """Select sources independently of running streams; apply changes off Qt."""
 
     def __init__(self, *, manager=None, geometry_locked=False, require_common_resolution=True, keep_running=True, require_fixed_focus=False):
         super().__init__()
@@ -274,10 +274,14 @@ class WebcamSetupDialog(QDialog):
         self.require_fixed_focus = require_fixed_focus
         self.keep_manager = False
         self.keep_running = keep_running
-        self._accepting = False
-        self._closing = False
+        self._accepting = self._closing = self._stopping = False
         self._future = None
-        self._stopping = False
+        self._operation = None
+        self._operation_error = ""
+        self._preview_running = bool(manager and manager.workers)
+        self._want_running = self._preview_running
+        self._selection_pending = False
+        self._carry = {}
         profile = load_profile()
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="webcam-setup")
         self.setWindowTitle("MAVIS · USB webcam setup")
@@ -286,7 +290,7 @@ class WebcamSetupDialog(QDialog):
         font.setPointSizeF(max(11., font.pointSizeF()))
         self.setFont(font)
         outer = QVBoxLayout(self)
-        self.status = QLabel("Select sources by their previews; camera indices may change after reconnecting USB.")
+        self.status = QLabel("Choose cameras below. Toggles update live previews; Stop releases all selected cameras.")
         self.status.setWordWrap(True)
         outer.addWidget(self.status)
         splitter = QSplitter()
@@ -313,28 +317,37 @@ class WebcamSetupDialog(QDialog):
         by_path = {device["device_path"]: device["index"] for device in devices}
         if saved and identities and all(identities.get(str(i)) in by_path for i in saved):
             saved = [by_path[identities[str(i)]] for i in saved]
-        initial = manager.camera_indices if manager else saved or available or [0, 1, 2, 3]
-        self.sources = QLineEdit(",".join(map(str, initial)))
+        initial = list(manager.camera_indices) if manager else saved or available or [0, 1, 2, 3]
+        self._catalog = {device["index"]: device.get("name", "Camera") for device in devices}
+        self._selected = list(initial)
+        for source in initial:
+            self._catalog.setdefault(source, "Camera")
+        # Keep known unchecked devices available, including those outside the saved profile.
+        candidates = list(dict.fromkeys([*available, *initial]))
+        self.sources = QLineEdit(",".join(map(str, candidates)))
         form.addRow("Source indices", self.sources)
         self.backend = QComboBox()
         for label, value in [("Auto (DirectShow first)", "auto"), ("DirectShow", "dshow"), ("Media Foundation", "msmf")]:
             self.backend.addItem(label, value)
-        backend = manager.backend if manager else profile["backend"]
-        self.backend.setCurrentIndex(self.backend.findData(backend))
+        self.backend.setCurrentIndex(self.backend.findData(manager.backend if manager else profile["backend"]))
         form.addRow("Capture backend", self.backend)
         self.panel_layout.addLayout(form)
-        self.restart_button = QPushButton("Preview sources")
+        self.restart_button = QPushButton("Find / preview sources")
         self.restart_button.clicked.connect(self.restart)
         self.panel_layout.addWidget(self.restart_button)
         self.checked_layout = QVBoxLayout()
         self.panel_layout.addLayout(self.checked_layout)
-        self.selection_button = QPushButton("Use selected")
+        self._checks_by_source = {}
+        self.checks = []
+        self._rebuild_choices()
+        self.selection_button = QPushButton("Start selected cameras")
         self.selection_button.clicked.connect(self.select_checked)
         self.panel_layout.addWidget(self.selection_button)
-        for widget in (self.sources, self.backend, self.restart_button, self.selection_button):
-            widget.setEnabled(self.owns_manager and not geometry_locked)
+        self.stop_button = QPushButton("Stop cameras")
+        self.stop_button.clicked.connect(self.stop_cameras)
+        self.panel_layout.addWidget(self.stop_button)
         self.controls = None
-        self.labels, self.checks = [], []
+        self.labels = []
         self.use_button = QPushButton("Save and continue" if self.owns_manager else "Save and close")
         self.use_button.clicked.connect(self.accept)
         self.cancel_button = QPushButton("Cancel")
@@ -343,39 +356,85 @@ class WebcamSetupDialog(QDialog):
         row.addWidget(self.use_button)
         row.addWidget(self.cancel_button)
         outer.addLayout(row)
+        self.selection_timer = QTimer(self)
+        self.selection_timer.setSingleShot(True)
+        self.selection_timer.setInterval(200)
+        self.selection_timer.timeout.connect(self._apply_selection)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.poll)
         self.timer.start(100)
         if manager:
             self.bind()
         else:
-            QTimer.singleShot(0, self.restart)
+            QTimer.singleShot(0, self.select_checked)
+        self._update_actions()
         apply_text_font(self, font)
         self.resize(1200, 760)
+
+    def _rebuild_choices(self):
+        while self.checked_layout.count():
+            self.checked_layout.takeAt(0).widget().deleteLater()
+        self._checks_by_source = {}
+        self.checks = []
+        for source, name in self._catalog.items():
+            check = QCheckBox(f"Source {source}")
+            check.setToolTip(name)
+            check.setChecked(source in self._selected)
+            check.setEnabled(self.owns_manager and not self.geometry_locked)
+            check.toggled.connect(self._selection_changed)
+            self.checked_layout.addWidget(check)
+            self._checks_by_source[source] = check
+            self.checks.append(check)
+
+    def _selection_changed(self, *_):
+        checked = [source for source, check in self._checks_by_source.items() if check.isChecked()]
+        self._selected = ([source for source in self._selected if source in checked]
+                          + [source for source in checked if source not in self._selected])
+        self.use_button.setEnabled(False)
+        if self._want_running:
+            self.status.setText("Updating selected cameras…")
+            self.selection_timer.start()
+        else:
+            self.status.setText("Cameras stopped. Choose sources, then Start selected cameras.")
+        self._update_actions()
+
+    def _remember_settings(self):
+        if self.manager:
+            self._carry.update({str(s["source"]): s["requested"] for s in self.manager.get_settings_snapshot()})
+
+    def _update_actions(self):
+        mutable = self.owns_manager and not self.geometry_locked and not self._closing
+        busy = self._future is not None
+        for widget in (self.sources, self.backend, self.restart_button):
+            widget.setEnabled(mutable and not busy)
+        for check in self.checks:
+            check.setEnabled(mutable)
+        self.selection_button.setEnabled(mutable and bool(self._selected) and not busy)
+        self.stop_button.setEnabled(mutable and (self._preview_running or busy) and self._want_running)
+        matched = bool(self.manager and self._preview_running and self._want_running
+                       and not self._operation_error
+                       and list(self.manager.camera_indices) == self._selected)
+        self.use_button.setEnabled(matched and not busy and not self.selection_timer.isActive() and not self._closing)
 
     def bind(self):
         if self.controls:
             self.controls.timer.stop()
             self.controls.deleteLater()
-        while self.checked_layout.count():
-            self.checked_layout.takeAt(0).widget().deleteLater()
-        self.checks = []
-        for source, state in zip(self.manager.camera_indices, self.manager.get_settings_snapshot()):
-            check = QCheckBox(f"Source {source}")
-            check.setToolTip(state.get("device_name") or "Camera")
-            check.setChecked(True)
-            check.setEnabled(self.owns_manager)
-            self.checked_layout.addWidget(check)
-            self.checks.append(check)
-        self.controls = WebcamControls(self.manager, geometry_locked=self.geometry_locked)
-        self.panel_layout.addWidget(self.controls)
-        grid = self.grid.reset(self.manager.num_cameras)
+            self.controls = None
+        states = self.manager.get_settings_snapshot() if self.manager else []
+        for state in states:
+            self._catalog[state["source"]] = state.get("device_name") or "Camera"
+        self._rebuild_choices()
+        if self._preview_running and states:
+            self.controls = WebcamControls(self.manager, geometry_locked=self.geometry_locked)
+            self.panel_layout.addWidget(self.controls)
+        grid = self.grid.reset(len(states) if self._preview_running else 0)
         self.labels = []
-        for i, source in enumerate(self.manager.camera_indices):
+        for i, state in enumerate(states if self._preview_running else []):
+            source = state["source"]
             container = QWidget()
             layout = QVBoxLayout(container)
             layout.setContentsMargins(0, 0, 0, 0)
-            state = self.manager.get_settings_snapshot()[i]
             title = QLabel(f"Camera {i} · source {source}: {state.get('device_name') or 'Camera'}")
             title.setWordWrap(True)
             title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
@@ -384,15 +443,17 @@ class WebcamSetupDialog(QDialog):
             layout.addWidget(preview, 1)
             grid.addWidget(container, i // self.grid.columns, i % self.grid.columns)
             self.labels.append(preview)
-        self.status.setText("Check source previews and settings. Keep the board still during capture; lock focus when supported.")
 
     def select_checked(self):
-        selected = [source for source, check in zip(self.manager.camera_indices, self.checks) if check.isChecked()]
-        self.sources.setText(",".join(map(str, selected)))
-        self.restart()
+        if not self.owns_manager or self.geometry_locked:
+            return
+        self._want_running = True
+        self.selection_timer.stop()
+        self._apply_selection()
 
     def restart(self):
-        if self._future is not None or not self.owns_manager:
+        """Probe explicitly entered sources and select their successful streams."""
+        if self._future is not None or not self.owns_manager or self.geometry_locked:
             return
         try:
             indices = [int(value.strip()) for value in self.sources.text().split(",") if value.strip()]
@@ -401,52 +462,95 @@ class WebcamSetupDialog(QDialog):
         except ValueError as exc:
             self.status.setText(str(exc))
             return
-        self.status.setText("Opening cameras…")
-        self.use_button.setEnabled(False)
-        backend, old = self.backend.currentData(), self.manager
-        self._future = self.executor.submit(self._open, old, indices, backend)
+        self._selected = indices
+        for source in indices:
+            self._catalog.setdefault(source, "Camera")
+        self._rebuild_choices()
+        self.select_checked()
+
+    def _apply_selection(self):
+        if not self.owns_manager or self.geometry_locked or self._closing:
+            return
+        if self._future is not None:
+            self._selection_pending = True
+            return
+        self._selection_pending = False
+        self._remember_settings()
+        if not self._want_running or not self._selected:
+            if self.manager and self._preview_running:
+                self.status.setText("Stopping cameras…")
+                self._operation = "stop"
+                self._future = self.executor.submit(self.manager.stop_all)
+            else:
+                self._preview_running = False
+                self.bind()
+                self.status.setText("Cameras stopped. Choose sources, then Start selected cameras.")
+        else:
+            self.status.setText("Starting selected cameras…")
+            self._operation = "open"
+            self._future = self.executor.submit(
+                self._open, self.manager, list(self._selected), self.backend.currentData(), dict(self._carry))
+        self._update_actions()
+
+    def stop_cameras(self):
+        if not self.owns_manager or self.geometry_locked:
+            return
+        self._want_running = False
+        self.selection_timer.stop()
+        self._apply_selection()
 
     @staticmethod
-    def _open(old, indices, backend):
+    def _open(old, indices, backend, carry):
         from unity_hand_tracking.webcam.multi_webcam import CameraManager
-        carry = {}
         if old:
-            carry = {str(s["source"]): s["requested"] for s in old.get_settings_snapshot()}
             old.stop_all()
         manager = CameraManager(indices, backend=backend)
         manager.profile["cameras"].update(carry)
         try:
             manager.start_all()
-            return manager, "" if manager.num_cameras else "No cameras opened; check source indices and Windows camera permissions"
+            missing = [i for i in indices if i not in manager.camera_indices]
+            error = f"Sources unavailable: {missing}. Check connections/permissions or uncheck them." if missing else ""
+            return manager, error
         except Exception as exc:  # noqa: BLE001 - Preserve manager for cleanup on native startup failure.
             return manager, str(exc)
 
     def poll(self):
         if self._future is not None and self._future.done():
             future, self._future = self._future, None
+            operation, self._operation = self._operation, None
             try:
-                if self._stopping:
+                if operation == "close":
                     future.result()
-                    self.timer.stop()
-                    self.executor.shutdown(wait=False)
-                    if self._accepting:
-                        super().accept()
-                    else:
-                        super().reject()
+                    self._finish()
                     return
-                self.manager, error = future.result()
-                self.bind()
-                self.status.setText(error or "Cameras ready. Select only the cameras used for calibration/tracking.")
-                self.use_button.setEnabled(not error and self.manager.num_cameras > 0)
+                if operation == "stop":
+                    future.result()
+                    self._preview_running = False
+                    self._operation_error = ""
+                    self.bind()
+                    self.status.setText("Cameras stopped. Selection is retained; Start selected cameras to resume.")
+                else:
+                    self.manager, error = future.result()
+                    self._operation_error = error
+                    self._preview_running = bool(self.manager.workers)
+                    self.bind()
+                    self.status.setText(error or "Selected cameras running. Toggles update the active sources.")
+                self._update_actions()
             except Exception as exc:  # noqa: BLE001 - Surface background discovery/driver failures.
-                self.status.setText(str(exc) + " — close the driver dialog and retry Cancel.")
-                if self._stopping:
+                self._operation_error = str(exc)
+                self._preview_running = bool(self.manager and self.manager.workers)
+                self.bind()
+                self.status.setText(str(exc) + " — close the driver dialog and retry.")
+                if operation == "close":
                     self._stopping = self._closing = self._accepting = False
                     self.cancel_button.setEnabled(True)
+                self._update_actions()
             if self._closing:
                 self.reject()
                 return
-        if self.manager and self._future is None:
+            if self._selection_pending:
+                self._apply_selection()
+        if self.manager and self._preview_running and self._future is None:
             for frame, label in zip(self.manager.get_all_frames(), self.labels):
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 h, w = rgb.shape[:2]
@@ -454,9 +558,13 @@ class WebcamSetupDialog(QDialog):
                 label.setPixmap(QPixmap.fromImage(QImage(rgb.data, w, h, rgb.strides[0], QImage.Format_RGB888)))
 
     def accept(self):
-        if self.manager is None or self._future is not None:
+        if self.manager is None or self._future is not None or self.selection_timer.isActive():
             return
         try:
+            if self._operation_error:
+                raise ValueError(self._operation_error)
+            if not self._want_running or not self._preview_running or list(self.manager.camera_indices) != self._selected:
+                raise ValueError("Start the selected cameras and wait for live previews before saving")
             sizes = [self.manager.get_resolution(i) for i in range(self.manager.num_cameras)]
             if not sizes:
                 raise ValueError("No selected cameras are streaming")
@@ -472,33 +580,46 @@ class WebcamSetupDialog(QDialog):
             self.status.setText(str(exc))
             return
         if self.owns_manager and not self.keep_running:
-            self._accepting = True
-            self._stopping = True
-            self.use_button.setEnabled(False)
+            self._accepting = self._stopping = True
+            self._closing = True
             self.cancel_button.setEnabled(False)
             self.status.setText("Saving complete; closing camera streams…")
+            self._operation = "close"
             self._future = self.executor.submit(self.manager.stop_all)
+            self._update_actions()
             return
         self.keep_manager = True
+        self._accepting = True
+        self._finish()
+
+    def _finish(self):
         self.timer.stop()
+        self.selection_timer.stop()
+        if self.controls:
+            self.controls.timer.stop()
         self.executor.shutdown(wait=False)
-        super().accept()
+        if self._accepting:
+            super().accept()
+        else:
+            super().reject()
 
     def reject(self):
         self._closing = True
+        self._want_running = False
+        self.selection_timer.stop()
         self.use_button.setEnabled(False)
         self.cancel_button.setEnabled(False)
+        self._update_actions()
         if self._future is not None:
             self.status.setText("Closing cameras…")
             return
         if self.owns_manager and self.manager and not self._stopping:
             self._stopping = True
             self.status.setText("Closing cameras…")
+            self._operation = "close"
             self._future = self.executor.submit(self.manager.stop_all)
             return
-        self.timer.stop()
-        self.executor.shutdown(wait=False)
-        super().reject()
+        self._finish()
 
     def closeEvent(self, event):
         event.ignore()

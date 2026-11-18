@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Make webcam selection toggles update active streams, retain unchecked sources, and add group start/stop controls with restart/cleanup failure handling.
 - Add model-independent Windows USB webcam setup with source previews/selection,
   native driver control ranges, auto/manual exposure and focus, gain/white balance,
   requested-versus-actual video modes, and local camera profiles.

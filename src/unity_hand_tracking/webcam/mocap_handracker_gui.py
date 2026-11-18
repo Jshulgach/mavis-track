@@ -354,7 +354,7 @@ class StereoHandTrackerGUI(QMainWindow):
         control_group = QGroupBox("Tracking")
         control_layout = QVBoxLayout(control_group)
         control_layout.setSpacing(3)
-        self.start_btn = QPushButton("Start Tracking")
+        self.start_btn = QPushButton("Start selected cameras")
         self.start_btn.clicked.connect(self.toggle_tracking)
         control_layout.addWidget(self.start_btn)
         self.status_label = QLabel("Status: Stopped")
@@ -389,11 +389,14 @@ class StereoHandTrackerGUI(QMainWindow):
         self.camera_info_label = QLabel("Cameras: \u2014")
         self.camera_info_label.setStyleSheet("color: #aaa;")
         camera_layout.addWidget(self.camera_info_label)
-        self.webcam_settings_button = QPushButton("USB camera settings…")
+        self.camera_selection_button = QPushButton("Choose cameras…")
+        self.camera_selection_button.clicked.connect(self._choose_webcams)
+        camera_layout.addWidget(self.camera_selection_button)
+        self.webcam_settings_button = QPushButton("Exposure / camera settings…")
         self.webcam_settings_button.clicked.connect(self._open_webcam_settings)
         camera_layout.addWidget(self.webcam_settings_button)
         self.exposure_grid = QGridLayout()
-        self.exposure_grid.addWidget(QLabel("Triangulate"), 0, 0)
+        self.exposure_grid.addWidget(QLabel("Use for 3D"), 0, 0)
         self.exposure_grid.addWidget(QLabel("Camera source"), 0, 1)
         camera_layout.addLayout(self.exposure_grid)
         layout.addWidget(camera_group)
@@ -612,6 +615,25 @@ class StereoHandTrackerGUI(QMainWindow):
     # ------------------------------------------------------------------ #
     # Exposure callbacks
     # ------------------------------------------------------------------ #
+    def _choose_webcams(self):
+        """Release the active group before changing physical capture sources."""
+        from mavis_track._webcam_settings import CameraSetupCancelled
+        from unity_hand_tracking.webcam.multi_webcam import CameraManager
+        was_running = self.is_running
+        try:
+            if was_running:
+                self.stop_tracking()
+            manager = CameraManager.create_configured(keep_running=False)
+            self.camera_info_label.setText(f"Selected sources: {list(manager.camera_indices)}")
+            self.status_label.setText("Camera selection saved.")
+        except CameraSetupCancelled:
+            self.status_label.setText("Camera selection cancelled; previous selection retained.")
+        except Exception as exc:
+            self.status_label.setText(f"Camera selection: {exc}")
+            return
+        if was_running:
+            self.start_tracking()
+
     def _open_webcam_settings(self):
         from mavis_track._webcam_settings import CameraSetupCancelled
         try:
@@ -990,7 +1012,7 @@ class StereoHandTrackerGUI(QMainWindow):
                 return
             self.num_cameras = self.tracker.num_cameras
             self.camera_info_label.setText(
-                f"Cameras: {self.num_cameras}\nIDs: {list(range(self.num_cameras))}"
+                f"Cameras: {self.num_cameras}\nSources: {self.tracker.camera_ids}"
             )
 
             # Dynamically populate video labels
@@ -1017,7 +1039,7 @@ class StereoHandTrackerGUI(QMainWindow):
                 item = self.exposure_grid.takeAt(0)
                 if item.widget():
                     item.widget().deleteLater()
-            self.exposure_grid.addWidget(QLabel("Triangulate"), 0, 0)
+            self.exposure_grid.addWidget(QLabel("Use for 3D"), 0, 0)
             self.exposure_grid.addWidget(QLabel("Camera source"), 0, 1)
             self.exposure_spinboxes = []
             self.cam_enabled_checkboxes = []
@@ -1025,6 +1047,8 @@ class StereoHandTrackerGUI(QMainWindow):
             for idx, source in enumerate(self.tracker.camera_ids):
                 cb = QCheckBox()
                 cb.setChecked(True)
+                cb.setEnabled(getattr(self.tracker, "calibration_available", True))
+                cb.setToolTip("Include this stream in calibrated 3D reconstruction. Use Choose cameras to start/stop sources.")
                 cb.toggled.connect(lambda checked, i=idx: self._on_cam_enabled_toggled(i, checked))
                 self.cam_enabled_checkboxes.append(cb)
                 self.exposure_grid.addWidget(cb, idx + 1, 0)
@@ -1044,7 +1068,7 @@ class StereoHandTrackerGUI(QMainWindow):
             self.reset_kalman_filters()
             # Update UI
             self.is_running = True
-            self.start_btn.setText("Stop Tracking")
+            self.start_btn.setText("Stop all cameras")
             self.start_btn.setStyleSheet("background-color: #d43333;")
             self.status_label.setText(getattr(self.tracker, "calibration_status", "Running"))
             available = getattr(self.tracker, "calibration_available", True)
@@ -1074,7 +1098,10 @@ class StereoHandTrackerGUI(QMainWindow):
             self.tracker.cleanup()
             self.tracker = None
         self.is_running = False
-        self.start_btn.setText("Start Tracking")
+        for label in self.video_labels:
+            label.clear()
+            label.setText("Camera stopped")
+        self.start_btn.setText("Start selected cameras")
         self.start_btn.setStyleSheet("")
         self.status_label.setText("Status: Stopped")
         self.status_label.setStyleSheet("color: #ffffff;")

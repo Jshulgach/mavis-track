@@ -13,9 +13,17 @@ mavis-track cameras --backend webcam
 ```
 
 The setup window previews every opened source. Check the camera names and images,
-uncheck any camera you do not want (including the laptop camera), and select
-**Use selected**. This restarts only the selected streams. You can also
-enter source indices explicitly. The order shown becomes the calibration order.
+uncheck any camera you do not want (including the laptop camera). Toggles update
+the running camera group automatically. Unchecked cameras stay in the list so
+you can turn them back on. **Stop cameras** releases all streams together and
+keeps your selection; **Start selected cameras** opens the checked sources again.
+While stopped, toggles change the selection without opening cameras. Turning
+every source off stops all streams; select a source again or use Start to resume.
+
+You can also enter source indices and use **Find / preview sources** to probe
+them. **Save and continue** requires the selected sources to be running, so an
+unapplied selection cannot be saved accidentally. The selection order becomes
+the calibration order.
 
 Choose a camera or **All cameras** in the settings panel. **Change video mode** enables width, height, requested FPS and format. MJPEG can reduce USB
 bandwidth when the driver supports it. These are requests, not a complete list of
@@ -82,9 +90,13 @@ Changed resolution, video format, device identity, focus or zoom prevents incomp
 mavis-track gui --backend webcam --advanced-hands
 ```
 
-This is the multi-camera hand-tracking view. **USB camera settings** uses the same
-panel. Geometry controls are locked while tracking; stop first to change sources,
-mode, focus or zoom. Without usable calibration, camera video and per-camera 2D
+This is the multi-camera hand-tracking view. **Start selected cameras** and
+**Stop all cameras** start/stop the tracking group. **Choose cameras** opens the
+same selection window, first stopping active tracking and then restarting with
+your saved sources. **Exposure / camera settings** adjusts live controls with
+geometry locked. **Use for 3D** checkboxes only control reconstruction, and are
+disabled without usable calibration; they do not start or stop USB streams.
+Stop first to change video mode, focus or zoom. Without usable calibration, camera video and per-camera 2D
 tracking remain available and calibrated 3D is disabled.
 
 `mavis-track gui --backend webcam` opens the single-camera Studio. Its **USB camera

@@ -146,3 +146,161 @@ def test_capture_now_cannot_bypass_pending_camera_changes():
     manager.states[0]["pending"] = True
     assert not controls.settings_ready
     assert not controls.capture_ready
+
+def wait_for(app, predicate):
+    import time
+    deadline = time.monotonic() + 5
+    while not predicate():
+        app.processEvents()
+        if time.monotonic() > deadline:
+            pytest.fail("Camera lifecycle did not finish")
+        time.sleep(.005)
+
+
+@pytest.fixture
+def selectable_dialog(app, monkeypatch):
+    import handtrack.applications._webcam_qt as ui
+    import mavis_track._webcam_windows as windows
+
+    class Streams(Manager):
+        def __init__(self, indices):
+            super().__init__()
+            templates = {s["source"]: s for s in self.states}
+            self.camera_indices = tuple(indices)
+            self.num_cameras = len(indices)
+            self.states = [templates[i] for i in indices]
+            self.workers = [object() for _ in indices]
+            self.stops = 0
+
+        def stop_all(self):
+            self.stops += 1
+            self.workers = []
+            self.states = []
+
+    opened = []
+    def open_sources(old, indices, backend, carry):
+        if old:
+            old.stop_all()
+        manager = Streams(indices)
+        opened.append(manager)
+        return manager, ""
+
+    monkeypatch.setattr(ui, "load_profile", lambda: {
+        "schema": 1, "backend": "dshow", "indices": [1, 2, 4], "cameras": {}})
+    monkeypatch.setattr(windows, "enumerate_devices", lambda: [
+        {"index": i, "device_path": f"usb-{i}", "name": f"USB {i}"} for i in (1, 2, 4)])
+    monkeypatch.setattr(WebcamSetupDialog, "_open", staticmethod(open_sources))
+    dialog = WebcamSetupDialog()
+    wait_for(app, lambda: dialog.manager is not None and dialog._future is None)
+    try:
+        yield dialog, opened
+    finally:
+        dialog.reject()
+        wait_for(app, lambda: not dialog.timer.isActive())
+
+
+def test_camera_toggles_change_streams_and_retain_unchecked_sources(app, selectable_dialog):
+    dialog, opened = selectable_dialog
+    original = dialog.manager
+    dialog._checks_by_source[2].click()
+    dialog.accept()
+    assert not original.saved
+    wait_for(app, lambda: dialog._future is None and tuple(dialog.manager.camera_indices) == (1, 4))
+    assert original.stops == 1
+    assert list(dialog._checks_by_source) == [1, 2, 4]
+    assert not dialog._checks_by_source[2].isChecked()
+    dialog._checks_by_source[2].click()
+    wait_for(app, lambda: dialog._future is None and set(dialog.manager.camera_indices) == {1, 2, 4})
+    assert len(opened) == 3
+
+
+def test_stop_and_start_release_all_cameras_and_keep_selection(app, selectable_dialog):
+    dialog, opened = selectable_dialog
+    dialog.stop_button.click()
+    wait_for(app, lambda: dialog._future is None and not dialog._preview_running)
+    assert opened[0].stops == 1 and not opened[0].workers
+    assert not dialog.labels and not dialog.use_button.isEnabled()
+    dialog._checks_by_source[2].click()
+    app.processEvents()
+    assert len(opened) == 1  # Selection while stopped must not acquire a camera.
+    dialog.selection_button.click()
+    wait_for(app, lambda: dialog._future is None and dialog._preview_running)
+    assert tuple(dialog.manager.camera_indices) == (1, 4)
+
+
+def test_deselect_all_stops_and_camera_can_be_selected_again(app, selectable_dialog):
+    dialog, _ = selectable_dialog
+    for check in dialog.checks:
+        check.click()
+    wait_for(app, lambda: dialog._future is None and not dialog._preview_running)
+    assert not dialog._selected and not dialog.labels
+    dialog._checks_by_source[4].click()
+    wait_for(app, lambda: dialog._future is None and dialog._preview_running)
+    assert tuple(dialog.manager.camera_indices) == (4,)
+
+
+def test_stop_during_start_waits_then_releases_new_streams(app, selectable_dialog, monkeypatch):
+    import threading
+    dialog, opened = selectable_dialog
+    gate = threading.Event()
+    original = WebcamSetupDialog._open
+    def blocked(*args):
+        assert gate.wait(3)
+        return original(*args)
+    monkeypatch.setattr(WebcamSetupDialog, "_open", staticmethod(blocked))
+    dialog._checks_by_source[2].click()
+    wait_for(app, lambda: dialog._future is not None)
+    dialog.stop_button.click()
+    gate.set()
+    wait_for(app, lambda: dialog._future is None and not dialog._preview_running)
+    assert len(opened) == 2
+    assert not opened[-1].workers
+    assert not dialog.labels
+
+
+def test_advanced_camera_selection_releases_tracking_before_setup(monkeypatch):
+    from types import SimpleNamespace
+
+    from unity_hand_tracking.webcam.mocap_handracker_gui import StereoHandTrackerGUI
+    from unity_hand_tracking.webcam.multi_webcam import CameraManager
+    calls = []
+    def setup(**kwargs):
+        calls.append("setup")
+        return SimpleNamespace(camera_indices=(1, 4))
+    monkeypatch.setattr(CameraManager, "create_configured", setup)
+    gui = SimpleNamespace(
+        is_running=True,
+        stop_tracking=lambda: calls.append("stop"),
+        start_tracking=lambda: calls.append("start"),
+        camera_info_label=SimpleNamespace(setText=lambda value: calls.append(value)),
+        status_label=SimpleNamespace(setText=lambda value: None))
+    StereoHandTrackerGUI._choose_webcams(gui)
+    assert calls == ["stop", "setup", "Selected sources: [1, 4]", "start"]
+
+def test_failed_reopen_does_not_leave_savable_frozen_previews(app, selectable_dialog, monkeypatch):
+    dialog, _ = selectable_dialog
+    def failed(old, *_):
+        old.stop_all()
+        raise RuntimeError("Driver unavailable")
+    monkeypatch.setattr(WebcamSetupDialog, "_open", staticmethod(failed))
+    dialog.selection_button.click()
+    wait_for(app, lambda: dialog._future is None)
+    assert not dialog._preview_running and not dialog.labels
+    assert not dialog.use_button.isEnabled()
+    assert "Driver unavailable" in dialog.status.text()
+    dialog.accept()
+    assert not dialog.manager.saved
+
+def test_stop_failure_cannot_save_stale_running_state(app, selectable_dialog, monkeypatch):
+    dialog, _ = selectable_dialog
+    original = dialog.manager.stop_all
+    def failed():
+        raise RuntimeError("Close native driver dialog")
+    monkeypatch.setattr(dialog.manager, "stop_all", failed)
+    dialog.stop_button.click()
+    wait_for(app, lambda: dialog._future is None)
+    assert not dialog.use_button.isEnabled()
+    dialog.accept()
+    assert not dialog.manager.saved
+    assert "Close native driver dialog" in dialog.status.text()
+    monkeypatch.setattr(dialog.manager, "stop_all", original)
