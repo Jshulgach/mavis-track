@@ -263,7 +263,8 @@ class StereoHandTrackerGUI(QMainWindow):
         self.video_layout.setContentsMargins(0, 0, 0, 0)
         self.video_labels = []
         # We will populate video_labels dynamically when cameras are initialized
-        self.splitter.addWidget(self.video_widget)
+        from handtrack.applications._landmark_analysis import LandmarkDashboard
+        self._landmarks = LandmarkDashboard(self, self.video_widget, self.splitter)
         # 3D Visualization Widget (hidden by default)
         self.vis_3d_label = ImagePreview()
         self.vis_3d_label.setMinimumSize(160, 120)
@@ -325,6 +326,7 @@ class StereoHandTrackerGUI(QMainWindow):
         font = QFont(self._control_font)
         font.setPointSizeF(max(1., self._control_font.pointSizeF()) * self.text_size_spin.value()/100)
         apply_text_font(self.control_panel, font)
+        self.landmark_panel.apply_font(font)
         self.control_scroll_area.setMinimumWidth(min(280, max(200, self.width()//2)))
         self.control_panel.ensurePolished()
         self.control_panel.layout().activate()
@@ -726,6 +728,7 @@ class StereoHandTrackerGUI(QMainWindow):
         self._dashboard_modes.changed()
 
     def _on_inference_toggled(self, enabled):
+        self.landmark_panel.invalidate("Waiting for inference" if enabled else "Inference off", clear_observations=True)
         if enabled:
             self._dashboard_modes.error = None
         self._dashboard_modes.apply()
@@ -824,10 +827,7 @@ class StereoHandTrackerGUI(QMainWindow):
 
     def on_show_3d_toggled(self, checked):
         self.show_3d_view = checked
-        if checked:
-            self.vis_3d_label.show()
-        else:
-            self.vis_3d_label.hide()
+        self.vis_3d_label.setVisible(bool(checked) and self.analysis_tabs.currentIndex() == 0)
         self._queue_display_refresh()
 
     def on_overlay_toggled(self, checked):
@@ -1330,12 +1330,22 @@ class StereoHandTrackerGUI(QMainWindow):
                         end="",
                         flush=True,
                     )
+            # Analysis uses the same estimates and matching source receipt times.
+            masks = [(np.asarray(data[4]) >= 2) & np.isfinite(data[3])
+                     for data in triangulated_hands_data]
+            self._landmarks.legacy(
+                frames, all_results, filtered_hands, handedness_labels[:len(filtered_hands)], masks,
+                getattr(self.tracker, "camera_ids", range(len(frames))),
+                getattr(self._proc_thread, "result_received_at", ()),
+                getattr(self._proc_thread, "result_timestamp", None))
             # Broadcast
             if self.udp_enabled or self.lsl_broadcaster:
                 self.broadcast_landmarks(frame_landmarks, num_hands)
                 self.broadcast_joint_angles(hand_angle_packets)
             # Display frames
             for idx, (frame, results) in enumerate(zip(frames, all_results)):
+                if self.analysis_tabs.currentIndex() != 0:
+                    break
                 if frame is None or idx >= len(self.video_labels):
                     continue
                 display_frame = frame.copy()
@@ -1449,7 +1459,7 @@ class StereoHandTrackerGUI(QMainWindow):
                     self.jitter_label.setText(
                         f"Jitter (raw/filtered): {raw_std:.4f} / {filt_std:.4f}"
                     )
-            if self.show_3d_view and triangulated_hands_data:
+            if self.show_3d_view and triangulated_hands_data and self.analysis_tabs.currentIndex() == 0:
                 self.update_3d_view(raw_hands, filtered_hands)
             self.frame_count += 1
             self.frame_label.setText(f"Frames: {self.frame_count}")
@@ -1707,6 +1717,7 @@ class StereoHandTrackerGUI(QMainWindow):
             return
         self.stop_tracking()
         self.stop_udp_broadcast()
+        self.landmark_panel.timer.stop()
         event.accept()
 
 

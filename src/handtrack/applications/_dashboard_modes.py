@@ -79,6 +79,8 @@ class DashboardModes:
             "Hands: calibrated 3D when available. Body, face and combined: per-camera overlays.")
 
     def changed(self, *_):
+        if hasattr(self.owner, "_landmarks"):
+            self.owner._landmarks.reset("Tracking model/mode changed; waiting for observations")
         self._sync_choices()
         self.error = None
         self._last_packet = None
@@ -157,6 +159,7 @@ class DashboardModes:
         self.capabilities()
 
     def start(self):
+        self.owner._landmarks.reset("Waiting for fresh inference observations")
         self._stopping = False
         self._cap_state = None
         self.apply()
@@ -164,6 +167,7 @@ class DashboardModes:
             self.owner._queue_display_refresh()
 
     def stop(self):
+        self.owner.landmark_panel.invalidate("Cameras stopped; history retained", clear_observations=True)
         self._stopping = True
         self._cap_state = None
         if self.worker is not None:
@@ -175,6 +179,8 @@ class DashboardModes:
         return self.worker is not None and self.worker.is_alive()
 
     def _render_raw(self, manager):
+        if hasattr(self.owner, "analysis_tabs") and self.owner.analysis_tabs.currentIndex() != 0:
+            return
         if manager is None:
             return
         for label, worker in zip(self.owner.video_labels, list(manager.workers)):
@@ -246,6 +252,8 @@ class DashboardModes:
         by_source = dict(zip(packet.sources, images))
         sources = getattr(manager, "camera_indices", range(len(self.owner.video_labels)))
         for source, label in zip(sources, self.owner.video_labels):
+            if self.owner.analysis_tabs.currentIndex() != 0:
+                break
             frame = by_source.get(source)
             if frame is None:
                 label.clear()
@@ -262,6 +270,7 @@ class DashboardModes:
         self.owner.hands_label.setText("2D per view")
         self.owner.tracked_hand_label.setText("Per-camera counts")
         if packet is not self._last_packet:
+            self.owner._landmarks.regions(packet)
             if self._last_packet is not None:
                 dt = packet.finished_at - self._last_packet.finished_at
                 if dt > 0:

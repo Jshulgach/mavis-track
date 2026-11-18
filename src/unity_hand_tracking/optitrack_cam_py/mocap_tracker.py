@@ -268,8 +268,13 @@ class MultiCameraTracker:
     def capture_frames(self):
         """Grab the latest BGR frame from every camera via CameraManager."""
         t0 = time.perf_counter()
-        frames = (self.cam_mgr.get_fresh_frames() if hasattr(self.cam_mgr, "get_fresh_frames")
-                  else self.cam_mgr.get_all_frames(copy=False))
+        self.frame_received_at = ()
+        if hasattr(self.cam_mgr, "get_fresh_snapshot"):
+            frames, self.frame_received_at = self.cam_mgr.get_fresh_snapshot()
+        else:
+            frames = (self.cam_mgr.get_fresh_frames() if hasattr(self.cam_mgr, "get_fresh_frames")
+                      else self.cam_mgr.get_all_frames(copy=False))
+        self.capture_timestamp = max((t for t in self.frame_received_at if t is not None), default=None)
         self._capture_ms = (time.perf_counter() - t0) * 1000
         return frames
 

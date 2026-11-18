@@ -17,6 +17,9 @@ class ProcessingThread(threading.Thread):
         self._paused.set()
         self._lock = threading.Lock()
         self._latest_result = None
+        self._latest_times = ((), None)
+        self.result_received_at = ()
+        self.result_timestamp = None
         self.error = None
         self.warming_up = True
         self._proc_fps = 0.0
@@ -70,6 +73,8 @@ class ProcessingThread(threading.Thread):
                 with self._lock:
                     if revision == self._revision:
                         self._latest_result = result
+                        self._latest_times = (tuple(getattr(self.tracker, "frame_received_at", ())),
+                                              getattr(self.tracker, "capture_timestamp", None))
                         self.warming_up = False
                 now = time.perf_counter()
                 dt = now - self._t_prev
@@ -90,6 +95,7 @@ class ProcessingThread(threading.Thread):
     def get_latest(self):
         with self._lock:
             result = self._latest_result
+            self.result_received_at, self.result_timestamp = self._latest_times
             self._latest_result = None
             return result
 

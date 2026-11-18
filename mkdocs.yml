@@ -47,6 +47,7 @@ nav:
   - CLI: cli.md
   - Backends: backends.md
   - USB webcams: webcams.md
+  - Landmark analysis: landmark-analysis.md
   - OptiTrack recording: optitrack-recording.md
   - Vicon synchronization: vicon-sync.md
   - WiLoR (experimental): wilor.md

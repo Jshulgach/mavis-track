@@ -16,7 +16,7 @@ import threading
 import time
 from collections import deque
 
-from mavis_track._capture import FrameBuffer, snapshots
+from mavis_track._capture import FrameBuffer, snapshot_batch, snapshots
 from mavis_track._webcam_settings import (
     GEOMETRY_KEYS,
     apply_settings,
@@ -519,6 +519,9 @@ class CameraManager:
                 frame = np.zeros((worker.height, worker.width, 3), np.uint8)
             frames.append(frame.copy() if copy else frame)
         return frames
+
+    def get_fresh_snapshot(self):
+        return snapshot_batch(self.workers)
 
     def get_fresh_frames(self):
         return snapshots(self.workers)

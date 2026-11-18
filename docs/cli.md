@@ -93,6 +93,9 @@ Use `sync-report` and `sync-replay` for their gap diagnostics, C3D alignment,
 sampled exposure-signal analysis and optional calibrated marker overlays. See
 [Vicon trial workflow](vicon-sync.md) for commands, anchors and confidence limits.
 
+Both advanced dashboards also include a [Landmark tracker tab](landmark-analysis.md)
+with live position, velocity and acceleration plots for one selected landmark.
+
 ## Optional WiLoR model
 
 After the [isolated WiLoR setup](wilor.md), source checkouts support:

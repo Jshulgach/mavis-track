@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a shared Landmark tracker tab with named/searchable landmark selection, coordinate-labelled position/velocity/acceleration plots, bounded history, pause/clear controls and source-receipt timing. Reset derivative fits across loss, rejected points, identity changes and gaps; retain camera capture while switching tabs.
+
 - Match webcam display controls to OptiTrack with text zoom, monitor DPI refresh and fit/fill previews; wrap status text, stack smoothing fields and keep 3D previews within the window on small screens.
 
 - Add hands/body/face/combined MediaPipe selection and an independent inference toggle to both advanced camera dashboards. Load models and draw per-camera overlays in background workers without reopening cameras; disable calibrated hand outputs in region modes.

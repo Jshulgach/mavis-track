@@ -26,7 +26,7 @@ import time
 from collections import deque
 from dataclasses import asdict
 
-from mavis_track._capture import FrameBuffer, snapshots
+from mavis_track._capture import FrameBuffer, snapshot_batch, snapshots
 from mavis_track._optitrack_runtime import capture_runtime, shutdown_capture_sdks
 
 import cv2
@@ -514,6 +514,9 @@ class CameraManager:
                 frame = np.zeros((worker.height, worker.width, 3), np.uint8)
             frames.append(frame.copy() if copy else frame)
         return frames
+
+    def get_fresh_snapshot(self):
+        return snapshot_batch(self.workers)
 
     def get_fresh_frames(self):
         return snapshots(self.workers)

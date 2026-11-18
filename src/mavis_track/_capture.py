@@ -37,7 +37,13 @@ class FrameBuffer:
 
 def snapshots(workers, max_skew=0.05):
     """Drop expired frames and cameras outside a receipt-time skew window."""
+    return snapshot_batch(workers, max_skew=max_skew)[0]
+
+
+def snapshot_batch(workers, max_skew=0.05):
+    """Return matching frames and host receipt times after freshness/skew checks."""
     values = [worker.get_snapshot() for worker in workers]
     latest = max((stamp for frame, stamp in values if frame is not None), default=None)
-    return [frame if frame is not None and latest - stamp <= max_skew else None
-            for frame, stamp in values]
+    accepted = [(frame, stamp) if frame is not None and latest-stamp <= max_skew
+                else (None, None) for frame, stamp in values]
+    return [frame for frame, _ in accepted], tuple(stamp for _, stamp in accepted)
