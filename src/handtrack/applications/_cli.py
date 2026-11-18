@@ -178,11 +178,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    gui_parser = subparsers.add_parser("gui", help="launch the live hand-tracking GUI")
+    gui_parser = subparsers.add_parser("gui", help="launch the advanced multi-camera hands dashboard")
     _add_backend_argument(gui_parser)
-    gui_parser.add_argument("--advanced-hands", action="store_true", help="use calibrated multi-camera tracking")
-    gui_parser.add_argument("--source", default="0", help="camera index or video path")
-    gui_parser.add_argument("--mode", choices=("hands", "face", "pose", "holistic"), default="hands")
+    gui_mode = gui_parser.add_mutually_exclusive_group()
+    gui_mode.add_argument("--advanced-hands", dest="advanced_hands", action="store_true",
+                          help="use the default multi-camera hands dashboard (compatibility option)")
+    gui_mode.add_argument("--studio", dest="advanced_hands", action="store_false",
+                          help="explicitly open the single-camera/video Studio")
+    gui_parser.set_defaults(advanced_hands=True)
+    gui_parser.add_argument("--source", default=None, help="Studio camera index or video path; requires --studio")
+    gui_parser.add_argument("--mode", choices=("hands", "face", "pose", "holistic"), default="hands",
+                            help="Studio tracking mode; the default dashboard uses hands")
     gui_parser.add_argument("--wilor-batch-size", type=int, choices=range(1, 17), default=2,
                             help="maximum hand crops per shared WiLoR inference batch")
     demo_parser = subparsers.add_parser("demo", help="start tracking with one camera, without calibration")
@@ -435,13 +441,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         from ._wilor_doctor import run
         return run(args.wilor_root, backend=_resolve_backend(args.backend), gui=args.gui)
 
-    if getattr(args, "model", "mediapipe") == "wilor":
-        if args.mode != "hands":
-            parser.error("WiLoR supports hands only; use --mode hands")
-        if args.command == "gui" and args.advanced_hands and args.backend == "webcam":
-            parser.error("WiLoR multi-camera GUI currently uses --backend optitrack")
-        if args.command == "gui" and args.backend == "auto":
-            args.backend = "optitrack" if args.advanced_hands else "webcam"
+    if getattr(args, "model", "mediapipe") == "wilor" and args.mode != "hands":
+        parser.error("WiLoR supports hands only; use --mode hands")
+    if args.command == "gui" and not args.advanced_hands and args.backend == "auto":
+        args.backend = "webcam"
 
     selected_backend = None
     if hasattr(args, "backend"):
@@ -449,12 +452,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     if getattr(args, "backend", None) == "auto":
         print(f"[mavis-track] Selected backend: {selected_backend}")
 
-    if args.command == "demo" or (args.command == "gui" and not args.advanced_hands and selected_backend == "webcam"):
+    if args.command == "gui":
+        if args.advanced_hands:
+            if args.mode != "hands":
+                parser.error("The advanced dashboard supports hands; use --studio --mode "
+                             + args.mode + " or the demo command for other tracking modes")
+            if args.source is not None:
+                parser.error("The dashboard selects sources through Choose cameras; use --studio for --source")
+            if args.model == "wilor" and selected_backend == "webcam":
+                parser.error("WiLoR multi-camera GUI currently uses --backend optitrack; "
+                             "use --studio or demo for single-camera WiLoR")
+        elif selected_backend != "webcam":
+            parser.error("Studio uses webcam/video sources; use --backend webcam or omit --studio")
+
+    if args.command == "demo" or (args.command == "gui" and not args.advanced_hands):
         try:
             from .mediapipe_gui import main as demo_main
         except ImportError as exc:
             parser.error(f"Install the desktop extra: pip install 'mavis-track[gui]' ({exc})")
-        preview_args = ["--source", args.source, "--mode", args.mode, "--model", args.model,
+        preview_args = ["--source", "0" if args.source is None else args.source,
+                        "--mode", args.mode, "--model", args.model,
                         "--wilor-device", args.wilor_device]
         if args.wilor_root is not None:
             preview_args.extend(["--wilor-root", args.wilor_root])

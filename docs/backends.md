@@ -8,7 +8,7 @@ calibration. The Python frame API can use any caller-owned image source.
 ```bash
 mavis-track board --backend webcam
 mavis-track calibrate --backend webcam
-mavis-track gui --backend webcam --advanced-hands
+mavis-track gui --backend webcam
 ```
 
 Use matching camera resolutions and a accurately printed ChArUco board.

@@ -96,7 +96,7 @@ class MediaPipeTrackerGUI(QMainWindow):
         self.camera_settings_button = QPushButton("USB camera setup…")
         self.camera_settings_button.setEnabled(isinstance(self.source, int))
         self.camera_settings_button.setToolTip(
-            "Configure USB cameras. Studio previews one source; calibrated multi-camera tracking uses --advanced-hands.")
+            "Configure USB cameras. Studio previews one source; multi-camera tracking uses mavis-track gui.")
         self.camera_settings_button.clicked.connect(self._configure_camera)
         controls.addWidget(self.camera_settings_button)
         controls.addStretch(1)

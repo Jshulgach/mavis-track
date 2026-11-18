@@ -118,10 +118,11 @@ Changed resolution, video format, device identity, focus or zoom prevents incomp
 ## Track
 
 ```powershell
-mavis-track gui --backend webcam --advanced-hands
+mavis-track gui --backend webcam
 ```
 
-This is the multi-camera hand-tracking view. **Start selected cameras** and
+The advanced multi-camera hand-tracking view is the default for every camera backend.
+The older `--advanced-hands` flag remains accepted. **Start selected cameras** and
 **Stop all cameras** start/stop the tracking group. **Choose cameras** opens the
 same selection window, first stopping active tracking and then restarting with
 your saved sources. **Exposure / camera settings** adjusts live controls with
@@ -130,7 +131,7 @@ disabled without usable calibration; they do not start or stop USB streams.
 Stop first to change video mode, focus or zoom. Without usable calibration, camera video and per-camera 2D
 tracking remain available and calibrated 3D is disabled.
 
-`mavis-track gui --backend webcam` opens the single-camera Studio. Its **USB camera
+`mavis-track gui --studio --backend webcam` explicitly opens the single-camera Studio. Its **USB camera
 setup** button stops the current stream before opening setup, then resumes the first
 selected source. Studio previews one source; use the advanced command above for
 calibrated multi-camera tracking.

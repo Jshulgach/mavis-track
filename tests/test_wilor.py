@@ -168,12 +168,12 @@ def test_wilor_overlay_draws_mesh_and_joints_without_changing_result(fake_runtim
         tracker.close()
 
 
-def test_cli_forwards_wilor_options_without_optitrack_auto_routing(monkeypatch):
+def test_cli_studio_forwards_wilor_options_without_optitrack_auto_routing(monkeypatch):
     from handtrack.applications import _cli, mediapipe_gui
     called = []
     monkeypatch.setattr(_cli, "_optitrack_sdk_available", lambda: True)
     monkeypatch.setattr(mediapipe_gui, "main", lambda argv: called.extend(argv) or 0)
-    assert _cli.main(["gui", "--model", "wilor", "--wilor-root", "X:/WiLoR",
+    assert _cli.main(["gui", "--studio", "--model", "wilor", "--wilor-root", "X:/WiLoR",
                       "--wilor-device", "cuda", "--wilor-fast"]) == 0
     assert "--model" in called and called[called.index("--model") + 1] == "wilor"
     assert called[called.index("--wilor-root") + 1] == "X:/WiLoR"

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Make the advanced hands dashboard the default GUI for webcam and OptiTrack backends; retain explicit Studio/demo previews and compatibility with --advanced-hands.
 - Reject underconstrained ChArUco layouts before fitting, handle intrinsic quality failures without a traceback, and resume webcam observation checkpoints without recapturing good intrinsics.
 - Reuse the OptiTrack dashboard theme and control groups in camera testing/calibration; make first-time webcam calibration lock current autofocus positions and verify readback before capture.
 - Keep webcam dashboard tiles pinned to sources and change only toggled capture threads, preserving unaffected streams and their video settings.

@@ -1,6 +1,8 @@
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 from handtrack.applications import _cli
 
 
@@ -19,7 +21,6 @@ def test_module_entrypoint_does_not_receive_outer_cli_arguments(monkeypatch):
 
     def fake_main():
         received["argv"] = list(sys.argv)
-        return None
 
     monkeypatch.setattr(
         _cli.importlib,
@@ -182,3 +183,53 @@ def test_export_dispatches_to_export_runner(monkeypatch):
     assert exit_code == 0
     assert called["session"] == "recordings/demo-session"
     assert called["variant"] == "raw_landmarks"
+
+@pytest.mark.parametrize("backend", ["webcam", "optitrack"])
+@pytest.mark.parametrize("explicit", [False, True])
+def test_gui_defaults_to_advanced_for_each_backend(monkeypatch, backend, explicit):
+    calls = []
+    monkeypatch.setattr(_cli, "_optitrack_sdk_available", lambda: backend == "optitrack")
+    monkeypatch.setattr(_cli, "_run_module_entrypoint",
+                        lambda module, argv=None: calls.append((module, argv)) or 0)
+    args = ["gui"] + (["--backend", backend] if explicit else [])
+    assert _cli.main(args) == 0
+    assert calls[0][0] == _cli._BACKEND_ENTRYPOINTS[backend]["gui"]
+
+
+def test_gui_studio_opt_in_preserves_non_hand_modes_and_video(monkeypatch):
+    from handtrack.applications import mediapipe_gui
+    calls = []
+    monkeypatch.setattr(_cli, "_optitrack_sdk_available", lambda: True)
+    monkeypatch.setattr(mediapipe_gui, "main", lambda argv: calls.append(argv) or 0)
+    assert _cli.main(["gui", "--studio", "--source", "clip.mp4", "--mode", "pose"]) == 0
+    assert calls[0][0:4] == ["--source", "clip.mp4", "--mode", "pose"]
+
+
+@pytest.mark.parametrize("args", [
+    ["gui", "--backend", "webcam", "--mode", "pose"],
+    ["gui", "--backend", "webcam", "--source", "clip.mp4"],
+    ["gui", "--backend", "optitrack", "--studio"],
+    ["gui", "--studio", "--advanced-hands"],
+])
+def test_gui_never_silently_ignores_incompatible_preview_options(args):
+    with pytest.raises(SystemExit) as result:
+        _cli.main(args)
+    assert result.value.code == 2
+
+
+def test_default_wilor_gui_uses_optitrack_dashboard_when_available(monkeypatch):
+    calls = []
+    monkeypatch.setattr(_cli, "_optitrack_sdk_available", lambda: True)
+    monkeypatch.setattr(_cli, "_run_module_entrypoint",
+                        lambda module, argv=None: calls.append((module, argv)) or 0)
+    assert _cli.main(["gui", "--model", "wilor", "--wilor-device", "cuda"]) == 0
+    assert calls[0][0] == _cli._BACKEND_ENTRYPOINTS["optitrack"]["gui"]
+    assert "--model" in calls[0][1] and "wilor" in calls[0][1]
+
+
+def test_default_wilor_webcam_reports_unsupported_dashboard(monkeypatch, capsys):
+    monkeypatch.setattr(_cli, "_optitrack_sdk_available", lambda: False)
+    with pytest.raises(SystemExit) as result:
+        _cli.main(["gui", "--model", "wilor"])
+    assert result.value.code == 2
+    assert "WiLoR multi-camera" in capsys.readouterr().err
