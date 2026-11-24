@@ -329,7 +329,8 @@ def test_three_camera_dashboard_fits_small_screens_and_text_zoom(backend, size, 
             center = control.mapTo(scroll.viewport(), control.rect().center())
             assert scroll.viewport().rect().contains(center)
         details = window._dashboard_modes.details
-        assert details.height() >= 3*details.fontMetrics().height()
+        required_height = details.heightForWidth(details.width())
+        assert 0 < required_height <= details.height()
         window.camera_view_combo.setCurrentIndex(1)
         assert grid._fill and all(label._fill for label in window.video_labels)
         # A large 3D preview image must shrink inside the existing window.
