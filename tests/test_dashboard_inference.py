@@ -57,8 +57,11 @@ def models(monkeypatch):
             state.created.append(self)
 
         def process(self, rgb):
-            return SimpleNamespace(hands=[], poses=[self.mode] if self.mode in ("pose", "holistic") else [],
-                                   faces=[self.mode] if self.mode in ("face", "holistic") else [])
+            pose = (SimpleNamespace(landmark=[SimpleNamespace(x=.25, y=.5, visibility=1.)])
+                    if self.mode in ("pose", "holistic") else None)
+            return SimpleNamespace(hands=[], poses=[self.mode] if pose is not None else [],
+                                   faces=[self.mode] if self.mode in ("face", "holistic") else [],
+                                   raw=SimpleNamespace(pose_landmarks=pose))
 
         def draw(self, frame, result):
             frame[0, 0] = (0, 255, 0)
@@ -172,13 +175,6 @@ def test_wilor_uses_one_runtime_for_multiple_views(monkeypatch):
     assert state.closed
 
 
-@pytest.fixture
-def app():
-    pytest.importorskip("PyQt5")
-    from PyQt5.QtWidgets import QApplication
-    return QApplication.instance() or QApplication([])
-
-
 @pytest.mark.parametrize("backend", ["webcam", "optitrack_cam_py"])
 def test_dashboard_live_mode_switch_and_error_recovery(backend, app, models, monkeypatch):
     from handtrack.applications._display import ImagePreview
@@ -213,6 +209,25 @@ def test_dashboard_live_mode_switch_and_error_recovery(backend, app, models, mon
         controller.tick()
         assert "per-camera" in window.status_label.text()
         assert "Camera 7:" in controller.details.text()
+        window.show()
+        window.analysis_tabs.setCurrentIndex(1)
+        panel = window.landmark_panel
+        source_index = next(i for i in range(panel.source.count())
+                            if panel.source.itemData(i) == ("mediapipe", 7, "body"))
+        panel.source.setCurrentIndex(source_index)
+
+        def plots_received_motion():
+            controller.tick()
+            samples = panel.motion.samples
+            return bool(samples and np.isfinite(samples[-1].acceleration).all())
+
+        wait_for(plots_received_motion, app)
+        np.testing.assert_allclose(panel.motion.samples[-1].position, [16., 24.])
+        panel.render()
+        assert "px/s²" in panel.readout.text()
+        if panel.curves:
+            assert all(len(curves[0].getData()[0]) >= 5 for curves in panel.curves)
+        window.analysis_tabs.setCurrentIndex(0)
         if backend == "webcam":
             # A failed hands runtime must not disable a different inference mode.
             window._proc_thread = SimpleNamespace(error="old hands failure", is_alive=lambda: True,

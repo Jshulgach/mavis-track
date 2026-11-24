@@ -60,17 +60,11 @@ def test_wilor_model_and_rig_spaces_are_separate_and_track_identity_is_preserved
     assert not wilor_views([SimpleNamespace(hands=[hand, hand])], [2], [2.])
 
 
-@pytest.fixture(scope="session")
-def app():
-    pytest.importorskip('PyQt5')
-    from PyQt5.QtWidgets import QApplication
-    return QApplication.instance() or QApplication([])
-
-
-def observation(timestamp, *, units='m', dimensions=3, identity=('right', 1)):
+def observation(timestamp, *, units='m', dimensions=3, identity=('right', 1), label='Right hand'):
     xyz = np.tile(np.arange(dimensions, dtype=float), (21, 1))
     xyz[:, 0] = (timestamp-10)**2
-    return LandmarkObservation(('rig', 'right'), 'Right hand', 'hand', 'Test rig coordinates', units,
+    key = ('rig', identity[0])
+    return LandmarkObservation(key, label, 'hand', 'Test rig coordinates', units,
                                timestamp, xyz, np.ones(21, bool), identity)
 
 
@@ -151,7 +145,9 @@ def test_identity_change_and_missing_landmark_clear_derivatives(app):
         assert not panel._available and panel._sample is None
         panel.observe([observation(10.21)])
         assert np.isnan(panel._sample.velocity).all()
-        panel.observe([observation(10.24, identity=('right', 2))])
+        updated = observation(10.24, identity=('right', 2), label='Right hand #2')
+        panel.observe([updated])
+        assert panel.source.count() == 1 and panel.source.currentText() == 'Right hand #2'
         assert len(panel.motion.samples) == 1
         assert np.isnan(panel._sample.velocity).all()
         missing = observation(10.26, identity=('right', 2))

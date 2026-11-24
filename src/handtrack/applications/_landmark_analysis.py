@@ -119,7 +119,7 @@ class LandmarkPanel(QWidget):
             charts.addWidget(message)
         else:
             for title in ("Position", "Velocity", "Acceleration"):
-                plot = pg.PlotWidget(background="#1e1e1e")
+                plot = pg.PlotWidget(background="#1e1e1e", enableMenu=False)
                 plot.setMinimumSize(1, 140)
                 plot.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
                 plot.setLabel("bottom", "Time relative to latest sample", units="s")
@@ -127,7 +127,6 @@ class LandmarkPanel(QWidget):
                 plot.showGrid(x=True, y=True, alpha=.2)
                 plot.addLegend(offset=(8, 4))
                 plot.setMouseEnabled(x=False, y=True)
-                plot.setMenuEnabled(False)
                 curves = [plot.plot(pen=pg.mkPen(color, width=2), name=axis)
                           for axis, color in zip(("x", "y", "z"), ("#ff8585", "#75df99", "#7ebaff"))]
                 charts.addWidget(plot)
@@ -225,17 +224,18 @@ class LandmarkPanel(QWidget):
     def observe(self, observations):
         self.observations = {observation.key: observation for observation in observations}
         for observation in observations:
-            if observation.key not in self.catalog:
+            previous = self.catalog.get(observation.key)
+            if previous is None:
                 if len(self.catalog) >= 128:
                     continue
-                self.catalog[observation.key] = observation
                 self.source.blockSignals(True)
                 self.source.addItem(observation.label, observation.key)
                 self.source.blockSignals(False)
-            else:
-                self.catalog[observation.key] = observation
-                index = self.source.findData(observation.key)
-                self.source.setItemText(index, observation.label)
+            elif previous.label != observation.label:
+                # The catalog and the combo box share insertion order. Qt's
+                # findData does not compare Python tuple keys by value.
+                self.source.setItemText(list(self.catalog).index(observation.key), observation.label)
+            self.catalog[observation.key] = observation
         selected = self.observations.get(self.source.currentData())
         if selected is None:
             self.invalidate("Selected landmark lost or absent in this frame")
