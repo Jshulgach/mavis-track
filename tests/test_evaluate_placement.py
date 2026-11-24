@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import numpy as np
+
 from handtrack.applications import _evaluate_placement
 
 
@@ -20,3 +22,16 @@ def test_calibration_path_falls_back_when_backend_config_is_absent(monkeypatch):
         / "calibration_data"
         / "multi_camera_calib_latest.npz"
     )
+
+
+
+def test_placement_uses_each_cameras_calibrated_resolution(monkeypatch, tmp_path):
+    path = tmp_path / "calibration.npz"
+    data = {"num_cameras": 2, "img_size": (640, 480), "image_sizes": [(640, 480), (320, 240)]}
+    for i in range(2):
+        data.update({f"camera_matrix_{i}": np.eye(3), f"dist_coeffs_{i}": np.zeros(5),
+                     f"R_{i}": np.eye(3), f"T_{i}": np.array([i * .2, 0, 0])})
+    np.savez(path, **data)
+    monkeypatch.setattr(_evaluate_placement, "_calibration_path", lambda backend: path)
+    calibration = _evaluate_placement._load_calibration("webcam")
+    assert [cam["img_size"] for cam in calibration["cameras"]] == [(640, 480), (320, 240)]

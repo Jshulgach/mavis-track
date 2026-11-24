@@ -1,4 +1,6 @@
 """Exercise actual webcam capture routing and a sparse three-camera capture graph."""
+from contextlib import redirect_stdout
+from io import BytesIO, TextIOWrapper
 from types import SimpleNamespace
 
 import numpy as np
@@ -99,3 +101,29 @@ def test_runtime_requests_webcam_setup_before_real_entrypoint(monkeypatch):
     monkeypatch.setattr(capture, "run_capture", lambda module: module.CameraManager())
     assert runtime.main("webcam") == 1
     assert calls == [{"calibration": True}, "stop"]
+
+
+
+def test_tracking_starts_with_surviving_webcam_on_legacy_stdout(monkeypatch, tmp_path):
+    from unity_hand_tracking.webcam import mocap_tracker
+
+    manager = SimpleNamespace(num_cameras=2, camera_indices=[0, 2],
+                              get_resolution=lambda index: (640, 480), stop_all=lambda: None)
+
+    def start_surviving_camera():
+        manager.num_cameras = 1
+        manager.camera_indices = [2]
+
+    manager.start_all = start_surviving_camera
+    monkeypatch.setattr(mocap_tracker, "CameraManager", lambda: manager)
+    monkeypatch.setattr(mocap_tracker, "CALIBRATION_FILE", str(tmp_path / "missing.npz"))
+    tracker = mocap_tracker.MultiCameraTracker()
+    monkeypatch.setattr(tracker, "_load_mediapipe_hands_class",
+                        lambda: lambda **options: SimpleNamespace(close=lambda: None))
+    try:
+        with TextIOWrapper(BytesIO(), encoding="cp1252") as console, redirect_stdout(console):
+            assert tracker.initialize_cameras()
+        assert tracker.camera_ids == [2]
+        assert not tracker.calibration_available
+    finally:
+        tracker.cleanup()

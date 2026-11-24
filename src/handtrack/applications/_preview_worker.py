@@ -73,15 +73,25 @@ class PreviewWorker(threading.Thread):
                 from mavis_track._webcam_settings import load_profile, open_webcam
                 profile = load_profile()
                 if self.source in profile["indices"]:
-                    from mavis_track._webcam_windows import (
-                        apply_controls,
-                        enumerate_devices,
+                    from mavis_track._webcam_windows import apply_controls
+                    from unity_hand_tracking.webcam.multi_webcam import (
+                        camera_inventory,
+                        matching_sources,
                     )
-                    expected = profile.get("identities", {}).get(str(self.source))
-                    if expected and not any(device["index"] == self.source and device["device_path"] == expected
-                                            for device in enumerate_devices()):
-                        raise RuntimeError("Webcam identity changed; reopen USB camera setup")
-                    capture = open_webcam(self.source, profile["backend"], factory=cv2.VideoCapture)
+
+                    expected = profile.get("identities", {}).get(str(self.source), "")
+                    backend, devices = camera_inventory(profile["backend"])
+                    source = self.source
+                    if expected:
+                        matches = matching_sources(devices, expected)
+                        if len(matches) != 1:
+                            raise RuntimeError("Webcam identity changed; reopen USB camera setup")
+                        source = matches[0]
+                    capture = open_webcam(source, backend, factory=cv2.VideoCapture)
+                    if expected:
+                        _, current = camera_inventory(backend)
+                        if matching_sources(current, expected) != [source]:
+                            raise RuntimeError("Webcam order changed during startup; reopen USB camera setup")
                     settings = profile["cameras"].get(str(self.source), {})
             if capture is None:
                 capture = cv2.VideoCapture(self.source)
@@ -89,7 +99,7 @@ class PreviewWorker(threading.Thread):
                 raise RuntimeError(f"Unable to open camera source {self.source!r}")
             if settings:
                 from mavis_track._webcam_settings import apply_settings
-                _, errors, _ = apply_settings(capture, settings, native=lambda values: apply_controls(self.source, values))
+                _, errors, _ = apply_settings(capture, settings, native=lambda values: apply_controls(source, values, expected_path=expected))
                 if errors:
                     raise RuntimeError("Saved webcam settings could not be restored: " + "; ".join(errors.values()))
                 for _ in range(4):

@@ -212,9 +212,11 @@ def apply_settings(capture, settings, *, verify_auto=None, native=None):
         except cv2.error as exc:
             errors["fps"] = str(exc)
     try:
+        # DirectShow may rebuild the graph and revert the format or size when setting FPS.
+        current = read_settings(capture) if mode and "fps" in settings else before
         success = True
         for key in ("fourcc", "width", "height"):
-            if key in mode and not matches(key, mode[key], before[key], backend):
+            if key in mode and not matches(key, mode[key], current[key], backend):
                 value = cv2.VideoWriter_fourcc(*mode[key]) if key == "fourcc" else mode[key]
                 success = bool(capture.set(MODE_PROPERTIES[key], value)) and success
         actual = read_settings(capture)
@@ -274,6 +276,9 @@ def apply_settings(capture, settings, *, verify_auto=None, native=None):
                 if key in AUTO_KEYS:
                     native_modes[key] = actual
     actual = read_settings(capture)
+    if "fps" in accepted and not matches("fps", accepted["fps"], actual["fps"], backend):
+        requested_fps = accepted.pop("fps")
+        errors["fps"] = f"FPS request {requested_fps} is unconfirmed (readback {actual['fps']}); use received FPS"
     actual.update(native_modes)
     actual["_native_modes"] = native_modes
     actual["_unverified_controls"] = unverified

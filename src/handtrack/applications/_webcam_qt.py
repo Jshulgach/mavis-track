@@ -56,8 +56,9 @@ class WebcamControls(QWidget):
         form.setRowWrapPolicy(QFormLayout.WrapLongRows)
         self.target = QComboBox()
         self.target.addItem("All cameras", None)
+        names = {state["source"]: state.get("device_name") for state in manager.get_settings_snapshot()}
         for row, source in enumerate(manager.camera_indices):
-            self.target.addItem(f"Camera {row} / source {source}", row)
+            self.target.addItem(f"Source {source} · {names.get(source) or 'Camera'}", row)
         form.addRow("Camera", self.target)
         self.mode_enabled = QCheckBox("Change video mode")
         self.mode_enabled.setEnabled(not geometry_locked)
@@ -271,12 +272,11 @@ class WebcamControls(QWidget):
 class WebcamSetupDialog(QDialog):
     """Select sources independently of running streams; apply changes off Qt."""
 
-    def __init__(self, *, manager=None, geometry_locked=False, require_common_resolution=True, keep_running=True, require_fixed_focus=False):
+    def __init__(self, *, manager=None, geometry_locked=False, keep_running=True, require_fixed_focus=False):
         super().__init__()
         self.manager = manager
         self.owns_manager = manager is None
         self.geometry_locked = geometry_locked
-        self.require_common_resolution = require_common_resolution
         self.require_fixed_focus = require_fixed_focus
         self.keep_manager = False
         self.keep_running = keep_running
@@ -341,33 +341,50 @@ class WebcamSetupDialog(QDialog):
         self.panel_layout.addWidget(camera_group)
         form = QFormLayout()
         form.setRowWrapPolicy(QFormLayout.WrapLongRows)
-        from mavis_track._webcam_windows import enumerate_devices
-        devices = enumerate_devices()
-        available = [device["index"] for device in devices]
-        saved = profile["indices"]
-        identities = profile.get("identities", {})
-        by_path = {device["device_path"]: device["index"] for device in devices}
-        if saved and identities and all(identities.get(str(i)) in by_path for i in saved):
-            saved = [by_path[identities[str(i)]] for i in saved]
-        initial = list(manager.camera_indices) if manager else saved or available or [0, 1, 2, 3]
-        self._catalog = {device["index"]: device.get("name", "Camera") for device in devices
+        from unity_hand_tracking.webcam.multi_webcam import (
+            camera_inventory,
+            matching_sources,
+        )
+        preferred = manager.backend if manager else profile["backend"]
+        self._resolved_backend, devices = camera_inventory(preferred)
+        self._device_paths = {d["index"]: d["device_path"] for d in devices}
+        available = list(self._device_paths)
+        saved = []
+        for source in profile["indices"]:
+            path = profile.get("identities", {}).get(str(source))
+            mapped = matching_sources(devices, path) if path else [source]
+            if len(mapped) == 1 and mapped[0] not in saved:
+                saved.append(mapped[0])
+        if manager:
+            initial = list(manager.camera_indices)
+        elif profile["indices"]:
+            initial = saved
+        else:
+            initial = available[:16] or [0, 1, 2, 3]
+        self._catalog = {device["index"]: device.get("name") or "Camera" for device in devices
                          if self.owns_manager or device["index"] in initial}
         self._selected = list(initial)
         for source in initial:
             self._catalog.setdefault(source, "Camera")
-        # Keep known unchecked devices available, including those outside the saved profile.
-        candidates = list(dict.fromkeys([*available, *initial]))
+        candidates = list(dict.fromkeys([*available, *initial]))[:16]
         self.sources = QLineEdit(",".join(map(str, candidates)))
         form.addRow("Source indices", self.sources)
         self.backend = QComboBox()
         for label, value in [("Auto (DirectShow first)", "auto"), ("DirectShow", "dshow"), ("Media Foundation", "msmf")]:
             self.backend.addItem(label, value)
-        self.backend.setCurrentIndex(self.backend.findData(manager.backend if manager else profile["backend"]))
+        self.backend.setCurrentIndex(self.backend.findData(preferred))
         form.addRow("Capture backend", self.backend)
         camera_layout.addLayout(form)
         self.restart_button = QPushButton("Find / preview sources")
         self.restart_button.clicked.connect(self.restart)
         camera_layout.addWidget(self.restart_button)
+        self.retry_bandwidth = QCheckBox("Retry with MJPEG / up to 15 FPS")
+        self.retry_bandwidth.setChecked(True)
+        self.retry_bandwidth.setToolTip(
+            "If an open fails, request a lower-bandwidth mode on the selected previews and retry. "
+            "Previews may pause briefly while their mode changes.")
+        self.retry_bandwidth.setVisible(self.owns_manager and not self.geometry_locked)
+        camera_layout.addWidget(self.retry_bandwidth)
         self.checked_layout = QVBoxLayout()
         camera_layout.addLayout(self.checked_layout)
         self._checks_by_source = {}
@@ -387,6 +404,7 @@ class WebcamSetupDialog(QDialog):
         self.labels = []
         self._tiles_by_source = {}
         self._labels_by_source = {}
+        self._titles_by_source = {}
         self._tile_aspect = None
         self.use_button = QPushButton("Start calibration" if require_fixed_focus else
                                       "Save and continue" if self.owns_manager else "Save and close")
@@ -407,16 +425,53 @@ class WebcamSetupDialog(QDialog):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.poll)
         self.timer.start(100)
+        self.backend.currentIndexChanged.connect(self._backend_changed)
         if manager:
             self.bind()
         else:
-            QTimer.singleShot(0, self.select_checked)
+            if self._selected:
+                QTimer.singleShot(0, self.select_checked)
+            else:
+                self.status.setText("Saved webcams are unavailable. Choose the connected cameras below.")
         self._update_actions()
         apply_text_font(self, font)
         self.resize(1200, 760)
 
+    def _backend_changed(self, *_):
+        from unity_hand_tracking.webcam.multi_webcam import (
+            camera_inventory,
+            matching_sources,
+        )
+
+        resolved, devices = camera_inventory(self.backend.currentData())
+        if resolved == self._resolved_backend:
+            return
+        selected_paths = [self._device_paths[source] for source in self._selected if self._device_paths.get(source)]
+        self._resolved_backend = resolved
+        self._device_paths = {d["index"]: d["device_path"] for d in devices}
+        self._catalog = {d["index"]: d.get("name") or "Camera" for d in devices}
+        self._selected = list(dict.fromkeys(
+            matches[0] for path in selected_paths if len(matches := matching_sources(devices, path)) == 1))
+        self._carry.clear()
+        self.sources.setText(",".join(map(str, list(self._catalog)[:16])))
+        self._rebuild_choices()
+        for label in self._labels_by_source.values():
+            label.clear()
+        if self._want_running and self._selected:
+            self.select_checked()
+        else:
+            self.stop_cameras()
+            if self._future is None:
+                self.bind()
+                self.status.setText("Choose sources from the new backend, then start cameras.")
+
     def _rebuild_choices(self):
-        # Keep controls alive: removing/recreating them loses focus and click state.
+        # Keep controls for unchanged sources so toggles retain focus.
+        for source in self._checks_by_source.keys() - self._catalog.keys():
+            check = self._checks_by_source.pop(source)
+            self.checked_layout.removeWidget(check)
+            check.hide()
+            check.deleteLater()
         for source, name in self._catalog.items():
             check = self._checks_by_source.get(source)
             if check is None:
@@ -424,6 +479,7 @@ class WebcamSetupDialog(QDialog):
                 self.checked_layout.addWidget(check)
                 self._checks_by_source[source] = check
                 check.toggled.connect(self._selection_changed)
+            check.setText(f"Source {source} · {name}")
             check.setToolTip(name)
             check.blockSignals(True)
             check.setChecked(source in self._selected)
@@ -444,13 +500,13 @@ class WebcamSetupDialog(QDialog):
         self._update_actions()
 
     def _remember_settings(self):
-        if self.manager:
+        if self.manager and self.manager.backend == self._resolved_backend:
             self._carry.update({str(s["source"]): s["requested"] for s in self.manager.get_settings_snapshot()})
 
     def _update_actions(self):
         mutable = self.owns_manager and not self.geometry_locked and not self._closing and not self._focus_pending
         busy = self._future is not None or self._focus_pending
-        for widget in (self.sources, self.backend, self.restart_button):
+        for widget in (self.sources, self.backend, self.restart_button, self.retry_bandwidth):
             widget.setEnabled(mutable and not busy)
         for check in self.checks:
             check.setEnabled(mutable)
@@ -471,8 +527,12 @@ class WebcamSetupDialog(QDialog):
             self.controls.deleteLater()
             self.controls = None
         states = self.manager.get_settings_snapshot() if self.manager else []
-        for state in states:
-            self._catalog[state["source"]] = state.get("device_name") or "Camera"
+        if self.manager and self.manager.backend == self._resolved_backend:
+            for state in states:
+                if state.get("device_name"):
+                    self._catalog[state["source"]] = state["device_name"]
+                else:
+                    self._catalog.setdefault(state["source"], "Camera")
         self._rebuild_choices()
         if self._preview_running and states:
             self.controls = WebcamControls(self.manager, geometry_locked=self.geometry_locked)
@@ -482,6 +542,12 @@ class WebcamSetupDialog(QDialog):
         # Rebuild the layout only when discovering new sources, not on toggles.
         if set(self._catalog) != set(self._tiles_by_source):
             containers = self._tiles_by_source
+            for source in containers.keys() - self._catalog.keys():
+                tile = containers.pop(source)
+                tile.hide()
+                tile.deleteLater()
+                self._labels_by_source.pop(source)
+                self._titles_by_source.pop(source)
             for source in self._catalog:
                 if source in containers:
                     containers[source].setParent(self.grid)
@@ -501,13 +567,16 @@ class WebcamSetupDialog(QDialog):
                     apply_text_font(container, self.font())
                     containers[source] = container
                     self._labels_by_source[source] = preview
+                    self._titles_by_source[source] = title
                 grid.addWidget(containers[source], i // self.grid.columns, i % self.grid.columns)
                 containers[source].show()
+        for source, title in self._titles_by_source.items():
+            title.setText(f"Source {source}: {self._catalog[source]}")
         self.labels = list(self._labels_by_source.values())
         self._refresh_previews()
 
     def _refresh_previews(self):
-        if self.manager and self._want_running:
+        if self.manager and self._want_running and self.manager.backend == self._resolved_backend:
             if hasattr(self.manager, "get_frames_by_source"):
                 frames = self.manager.get_frames_by_source()
             else:
@@ -573,7 +642,9 @@ class WebcamSetupDialog(QDialog):
             self.status.setText("Starting selected cameras…")
             self._operation = "open"
             self._future = self.executor.submit(
-                self._open, self.manager, list(self._selected), self.backend.currentData(), dict(self._carry))
+                self._open, self.manager, list(self._selected), self._resolved_backend, dict(self._carry),
+                {source: self._device_paths[source] for source in self._selected if self._device_paths.get(source)},
+                self.retry_bandwidth.isChecked())
         self._update_actions()
 
     def stop_cameras(self):
@@ -584,24 +655,27 @@ class WebcamSetupDialog(QDialog):
         self._apply_selection()
 
     @staticmethod
-    def _open(old, indices, backend, carry):
+    def _open(old, indices, backend, carry, expected_paths=None, retry_bandwidth=False):
         from unity_hand_tracking.webcam.multi_webcam import CameraManager
-        if old and (backend == old.backend or backend == "auto" and old.backend == "dshow"):
+        if old and backend == old.backend:
             manager = old
             incremental = True
         else:
             if old:
                 old.stop_all()
-            manager = CameraManager(indices, backend=backend)
+            manager = CameraManager(indices, backend=backend, expected_paths=expected_paths)
             incremental = False
         manager.profile["cameras"].update(carry)
         try:
             if incremental:
-                manager.reconfigure(indices, settings=carry)
+                manager.reconfigure(indices, settings=carry, expected_paths=expected_paths,
+                                    retry_bandwidth=retry_bandwidth)
             else:
-                manager.start_all()
+                manager.start_all(retry_bandwidth=retry_bandwidth)
             missing = [i for i in indices if i not in manager.camera_indices]
-            error = f"Sources unavailable: {missing}. Check connections/permissions or uncheck them." if missing else ""
+            error = manager.startup_notice(missing) if missing else ""
+            if missing:
+                error = (error or f"Sources unavailable: {missing}") + ". Uncheck unavailable sources to continue with the live feeds."
             return manager, error
         except Exception as exc:  # noqa: BLE001 - Preserve manager for cleanup on native startup failure.
             return manager, str(exc)
@@ -626,7 +700,9 @@ class WebcamSetupDialog(QDialog):
                     self._operation_error = error
                     self._preview_running = bool(self.manager.workers)
                     self.bind()
-                    self.status.setText(error or "Selected cameras running. Toggles update the active sources.")
+                    retry = getattr(self.manager, "bandwidth_retry_notice", "")
+                    message = error or "Selected cameras running. Toggles update the active sources."
+                    self.status.setText(f"{retry} {message}".strip())
                 self._update_actions()
             except Exception as exc:  # noqa: BLE001 - Surface background discovery/driver failures.
                 self._operation_error = str(exc)
@@ -710,10 +786,8 @@ class WebcamSetupDialog(QDialog):
             if not self._want_running or not self._preview_running or list(self.manager.camera_indices) != self._selected:
                 raise ValueError("Start the selected cameras and wait for live previews before saving")
             sizes = [self.manager.get_resolution(i) for i in range(self.manager.num_cameras)]
-            if not sizes:
-                raise ValueError("No selected cameras are streaming")
-            if self.require_common_resolution and any(size != sizes[0] for size in sizes):
-                raise ValueError("Choose the same actual resolution on every camera before calibration/tracking")
+            if not sizes or any(width <= 0 or height <= 0 for width, height in sizes):
+                raise ValueError("Wait for each selected camera to report its actual resolution")
             if self.require_fixed_focus:
                 if any(state["pending"] for state in self.manager.get_settings_snapshot()):
                     raise ValueError("Wait for camera settings to settle before starting calibration")
