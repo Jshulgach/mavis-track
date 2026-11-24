@@ -58,6 +58,7 @@ class MultiCameraTracker:
         # MediaPipe Hands instances (one per camera — not thread-safe to share)
         self.hands_detectors: list[Any] = []
         self._mp_hands_cls = None
+        self._inference_params = (MIN_DETECTION_CONFIDENCE, MIN_TRACKING_CONFIDENCE)
 
         # Calibration data
         self.camera_matrices = []
@@ -66,6 +67,8 @@ class MultiCameraTracker:
         self.T_vectors = []
         self.projection_matrices = []
         self.calibration_available = False
+        self.calibration_error = None
+        self.calibration_file = str(CALIBRATION_FILE)
         self.calibration_status = "Calibration not loaded"
 
         # Set of camera indices used for triangulation (all enabled by default)
@@ -91,6 +94,7 @@ class MultiCameraTracker:
     def load_calibration(self):
         """Load validated camera matrices, resolving source identity and sizes."""
         from mavis_track.calibration import load_camera_calibration
+        self.calibration_file = str(CALIBRATION_FILE)
         sizes = None
         if self.cam_mgr is not None and hasattr(self.cam_mgr, "get_resolution"):
             sizes = [self.cam_mgr.get_resolution(i) for i in range(self.num_cameras)]
@@ -109,6 +113,7 @@ class MultiCameraTracker:
         self.calibration_identity_verified = verified
         self._compute_projection_matrices()
         self.calibration_available = True
+        self.calibration_error = None
         self.calibration_status = "Calibrated 3D"
 
     def _compute_projection_matrices(self):
@@ -159,6 +164,7 @@ class MultiCameraTracker:
         self,
         min_det_conf=MIN_DETECTION_CONFIDENCE,
         min_track_conf=MIN_TRACKING_CONFIDENCE,
+        inference_enabled=True,
     ) -> bool:
         """
         Start CameraManager, create per-camera MediaPipe detectors,
@@ -168,7 +174,9 @@ class MultiCameraTracker:
         # Rationale: in some Windows shell/runtime combinations, loading the
         # native camera stack first can cause MediaPipe's _framework_bindings
         # DLL initialization to fail later in the same process.
-        self._mp_hands_cls = self._load_mediapipe_hands_class()
+        self._inference_params = (min_det_conf, min_track_conf)
+        if inference_enabled:
+            self._mp_hands_cls = self._load_mediapipe_hands_class()
 
         # --- cameras via CameraManager ---
         self.cam_mgr = CameraManager()
@@ -203,6 +211,7 @@ class MultiCameraTracker:
             self.load_calibration()
         except (OSError, ValueError) as exc:
             self.calibration_available = False
+            self.calibration_error = str(exc)
             self.calibration_status = f"2D preview only - {exc}"
             self.camera_matrices, self.dist_coeffs = [], []
             self.R_matrices, self.T_vectors, self.projection_matrices = [], [], []
@@ -215,6 +224,21 @@ class MultiCameraTracker:
                 f"but {self.num_cameras} are connected."
             )
 
+        if inference_enabled:
+            self.initialize_inference()
+        print(f"{self.num_cameras} cameras initialised")
+        return True
+
+    def initialize_inference(self):
+        """Load hand models only on the processing thread when enabled."""
+        if len(self.hands_detectors) == self.num_cameras:
+            return
+        for detector in self.hands_detectors:
+            detector.close()
+        self.hands_detectors = []
+        if self._mp_hands_cls is None:
+            self._mp_hands_cls = self._load_mediapipe_hands_class()
+        min_det_conf, min_track_conf = self._inference_params
         # --- MediaPipe (one instance per camera for thread safety) ---
         self.hands_detectors = []
         for _ in range(self.num_cameras):
@@ -232,11 +256,10 @@ class MultiCameraTracker:
             thread_name_prefix="mp_detect",
         )
 
-        print(f"{self.num_cameras} cameras initialised with threaded MediaPipe")
-        return True
 
     def update_mp_params(self, min_det_conf, min_track_conf):
         """Re-initialize MediaPipe detectors with new confidence thresholds."""
+        self._inference_params = (min_det_conf, min_track_conf)
         if not self.hands_detectors:
             return
 
@@ -265,8 +288,13 @@ class MultiCameraTracker:
     def capture_frames(self):
         """Grab the latest BGR frame from every camera via CameraManager."""
         t0 = time.perf_counter()
-        frames = (self.cam_mgr.get_fresh_frames() if hasattr(self.cam_mgr, "get_fresh_frames")
-                  else self.cam_mgr.get_all_frames(copy=False))
+        self.frame_received_at = ()
+        if hasattr(self.cam_mgr, "get_fresh_snapshot"):
+            frames, self.frame_received_at = self.cam_mgr.get_fresh_snapshot()
+        else:
+            frames = (self.cam_mgr.get_fresh_frames() if hasattr(self.cam_mgr, "get_fresh_frames")
+                      else self.cam_mgr.get_all_frames(copy=False))
+        self.capture_timestamp = max((t for t in self.frame_received_at if t is not None), default=None)
         self._capture_ms = (time.perf_counter() - t0) * 1000
         return frames
 

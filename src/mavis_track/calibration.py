@@ -69,12 +69,16 @@ def load_camera_calibration(path, *, count, image_sizes=None, camera_ids=None, d
             expected_state = stored_settings[order[index]]
             saved_format = expected_state["actual"].get("fourcc")
             if saved_format and saved_format != state["actual"].get("fourcc"):
-                raise ValueError("Webcam video format differs from calibration; restore the calibrated mode")
+                raise ValueError(f"Webcam video format differs from calibration for source {state['source']}: "
+                                 f"expected {saved_format}, got {state['actual'].get('fourcc')}; restore the calibrated mode")
             expected = geometry_signature(expected_state)
             actual = geometry_signature(state)
-            if any(key not in actual or not np.isclose(value, actual[key], atol=.01, rtol=0)
-                   for key, value in expected.items()):
-                raise ValueError("Webcam focus/zoom differs from calibration; restore settings or recalibrate")
+            differences = [f"{key}: expected {value}, got {actual.get(key, 'unavailable')}"
+                           for key, value in expected.items()
+                           if key not in actual or not np.isclose(value, actual[key], atol=.01, rtol=0)]
+            if differences:
+                raise ValueError(f"Webcam focus/zoom differs from calibration for source {state['source']}: "
+                                 + "; ".join(differences) + "; restore the calibrated lens settings")
     elif camera_ids is not None and "camera_ids" in data:
         stored = data["camera_ids"].tolist()
         if len(set(stored)) != n or len(camera_ids) != n or set(stored) != set(camera_ids):
@@ -90,7 +94,9 @@ def load_camera_calibration(path, *, count, image_sizes=None, camera_ids=None, d
         if saved_sizes.shape != (n, 2) or np.any(saved_sizes <= 0):
             raise ValueError("Invalid calibration image sizes")
         if image_sizes is not None and not np.array_equal(saved_sizes[order], image_sizes):
-            raise ValueError("Camera resolution differs from calibration; recalibrate at the current resolution")
+            raise ValueError(f"Camera resolution differs from calibration: expected {saved_sizes[order].tolist()}, "
+                             f"got {np.asarray(image_sizes).tolist()}; restore the calibrated resolution "
+                             "or recalibrate if the new resolution is intentional")
     elif image_sizes is not None:
         warnings.warn("Legacy calibration has no saved image sizes", RuntimeWarning)
     Ks, dists, Rs, Ts = [], [], [], []

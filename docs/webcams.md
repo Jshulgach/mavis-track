@@ -127,6 +127,13 @@ Changed resolution, video format, device identity, focus or zoom prevents incomp
 
 ## Track
 
+Both camera dashboards provide **Display → Text size** (80–200%) and
+**Fit full image / Fill area**. Text uses point sizes and refreshes after monitor
+DPI changes; moving an oversized window to a smaller monitor shrinks it to the
+usable desktop. The sidebar resizes beside the video and scrolls on small screens;
+smoothing settings use one field per row. Fill area crops only the displayed
+image, preserving inference and calibration inputs.
+
 ```powershell
 mavis-track gui --backend webcam
 ```
@@ -141,7 +148,14 @@ feeds and lists the failed source in **Camera Setup**. The camera setup dialog
 also keeps successful previews running. Uncheck failed sources before saving a
 different selection. Calibrated 3D still requires a compatible camera set.
 
-The advanced multi-camera hand-tracking view is the default for every camera backend.
+The advanced multi-camera dashboard is the default for every camera backend.
+The tracking panel keeps a separate calibration notice visible while inference is
+off. Before startup it reports whether the configured file exists; starting
+cameras validates that file against the selected devices, mode and lens settings.
+A loaded calibration remains identified as loaded when a per-camera mode pauses
+rig 3D. Hover the notice to see the file path. Mismatch notices report the
+expected/current settings so the calibrated configuration can be restored.
+
 The older `--advanced-hands` flag remains accepted. **Start selected cameras** and
 **Stop all cameras** start/stop the tracking group. **Choose cameras** opens the
 same selection window, first stopping active tracking and then restarting with
@@ -150,6 +164,15 @@ geometry locked. **Use for 3D** checkboxes only control reconstruction, and are
 disabled without usable calibration; they do not start or stop USB streams.
 Stop first to change video mode, focus or zoom. Without usable calibration, camera video and per-camera 2D
 tracking remain available and calibrated 3D is disabled.
+
+**Model** selects MediaPipe or optional WiLoR. **Tracking mode** selects Hands,
+Body, Face or Hands + body + face for MediaPipe; WiLoR supports hands only.
+Start cameras and check **Enable inference** when ready. You can switch modes,
+switch the webcam model, or turn inference off while capture stays open.
+Loading/errors keep the raw feeds live. Body/face/combined modes show per-camera
+overlays and disable calibrated 3D and hand angle/landmark output. Webcam WiLoR
+also provides per-camera mesh/joint previews; MediaPipe Hands retains calibrated
+3D. WiLoR needs its [separate environment and assets](wilor.md).
 
 `mavis-track gui --studio --backend webcam` explicitly opens the single-camera Studio. Its **USB camera
 setup** button stops the current stream before opening setup, then resumes the first

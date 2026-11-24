@@ -38,9 +38,15 @@ long-session behavior still need evaluation. A plausible mesh is not an accuracy
 measurement.
 
 This first adapter supports **hands only**, with up to two detected hands.
-Face/body/holistic modes remain MediaPipe. WiLoR also supports OptiTrack
+Face/body/holistic modes remain MediaPipe and are available from either advanced
+dashboard. WiLoR also supports webcam and OptiTrack
 multi-camera viewing with per-camera meshes and joints. This preview uses one
 shared model, independent per-view tracking and bounded crop batches.
+The webcam dashboard supports per-camera WiLoR meshes/joints using one shared
+runtime; it does not reconstruct calibrated webcam WiLoR 3D. Enable inference
+after starting cameras; optional dependencies/assets load in the background.
+Switching modes or toggling inference preserves camera capture. On OptiTrack, stop
+cameras before changing the inference engine.
 The OptiTrack GUI also supports experimental calibrated joint triangulation
 and placement of a WiLoR mesh and skeleton in the shared 3D view. Recording,
 UDP and LSL remain disabled for WiLoR. The standalone frame API still returns

@@ -178,14 +178,16 @@ from handtrack.applications._display import (
 class StereoHandTrackerGUI(QMainWindow):
     """Main window with multi-camera display and control panel."""
 
-    def __init__(self, calc_splay: bool = False, *, model="mediapipe",
+    def __init__(self, calc_splay: bool = False, *, model="mediapipe", mode="hands",
                  wilor_root=None, wilor_device="auto", wilor_fast=False, wilor_batch_size=2):
         super().__init__()
         self.inference_model = model
+        self.tracking_mode = mode
         self._wilor_options = dict(root=wilor_root, device=wilor_device,
                                    fast=wilor_fast, batch_size=wilor_batch_size)
         self._wilor_session = None
         self._wilor_grid_ready = False
+        self._analysis_wilor_packet = None
         self._wilor_draw_packet = None
         self._wilor_draw_cache = {}
         self._wilor_3d_key = None
@@ -317,7 +319,8 @@ class StereoHandTrackerGUI(QMainWindow):
         self.video_layout = self.video_grid.grid
         self.video_labels = []
         # We will populate video_labels dynamically when cameras are initialized
-        self.display_splitter.addWidget(self.video_grid)
+        from handtrack.applications._landmark_analysis import LandmarkDashboard
+        self._landmarks = LandmarkDashboard(self, self.video_grid, self.display_splitter)
         # 3D Visualization Widget (hidden by default)
         self.vis_3d_label = _ImageLabel()
         self.vis_3d_label.setStyleSheet(
@@ -366,6 +369,10 @@ class StereoHandTrackerGUI(QMainWindow):
         self._display_screen = screen
         if screen is not None:
             screen.logicalDotsPerInchChanged.connect(self._queue_display_refresh)
+            available = screen.availableGeometry().adjusted(12, 12, -12, -12)
+            frame = self.frameGeometry()
+            if frame.width() > available.width() or frame.height() > available.height():
+                fit_window_to_screen(self, preferred=(self.width(), self.height()))
         self._queue_display_refresh()
 
     def _queue_display_refresh(self, *args):
@@ -375,6 +382,7 @@ class StereoHandTrackerGUI(QMainWindow):
         font = QFont(self._control_font)
         font.setPointSizeF(max(1., self._control_font.pointSizeF()) * self.text_size_spin.value()/100)
         apply_text_font(self.control_panel, font)
+        self.landmark_panel.apply_font(font)
         self.control_scroll.setMinimumWidth(min(280, max(200, self.width()//2)))
         self.control_panel.ensurePolished()
         self.control_panel.layout().activate()
@@ -565,6 +573,8 @@ class StereoHandTrackerGUI(QMainWindow):
         self.model_combo.setCurrentIndex(1 if self.inference_model == "wilor" else 0)
         self.model_combo.currentIndexChanged.connect(self._on_model_selected)
         control_layout.addWidget(self.model_combo)
+        from handtrack.applications._dashboard_modes import DashboardModes
+        self._dashboard_modes = DashboardModes(self, control_layout)
         self.wilor_view_combo = QComboBox()
         self.wilor_view_combo.addItem("Mesh overlays (matched frames)", "matched")
         self.wilor_view_combo.addItem("Live camera feeds", "live")
@@ -608,6 +618,7 @@ class StereoHandTrackerGUI(QMainWindow):
         self.timing_label = QLabel("Capture: 0ms | Detect: 0ms | Tri: 0ms")
         self.timing_label.setStyleSheet("color: #aaa; ")
         self.timing_label.setAlignment(Qt.AlignCenter)
+        self.timing_label.setWordWrap(True)
         control_layout.addWidget(self.timing_label)
         layout.addWidget(control_group)
         display_group = QGroupBox("Display")
@@ -807,30 +818,30 @@ class StereoHandTrackerGUI(QMainWindow):
         self.k3d_p.setValue(self.kalman_3d_process_noise)
         self.k3d_p.valueChanged.connect(self.on_kalman_params_changed)
         kalman_grid.addWidget(self.k3d_p, 0, 1)
-        kalman_grid.addWidget(QLabel("3D Meas"), 0, 2)
+        kalman_grid.addWidget(QLabel("3D Meas"), 1, 0)
         self.k3d_m = QDoubleSpinBox()
         self.k3d_m.setDecimals(6)
         self.k3d_m.setRange(1e-6, 1.0)
         self.k3d_m.setSingleStep(1e-4)
         self.k3d_m.setValue(self.kalman_3d_measurement_noise)
         self.k3d_m.valueChanged.connect(self.on_kalman_params_changed)
-        kalman_grid.addWidget(self.k3d_m, 0, 3)
-        kalman_grid.addWidget(QLabel("Ang Proc"), 1, 0)
+        kalman_grid.addWidget(self.k3d_m, 1, 1)
+        kalman_grid.addWidget(QLabel("Ang Proc"), 2, 0)
         self.k1d_p = QDoubleSpinBox()
         self.k1d_p.setDecimals(6)
         self.k1d_p.setRange(1e-6, 10.0)
         self.k1d_p.setSingleStep(1e-3)
         self.k1d_p.setValue(self.kalman_1d_process_noise)
         self.k1d_p.valueChanged.connect(self.on_kalman_params_changed)
-        kalman_grid.addWidget(self.k1d_p, 1, 1)
-        kalman_grid.addWidget(QLabel("Ang Meas"), 1, 2)
+        kalman_grid.addWidget(self.k1d_p, 2, 1)
+        kalman_grid.addWidget(QLabel("Ang Meas"), 3, 0)
         self.k1d_m = QDoubleSpinBox()
         self.k1d_m.setDecimals(6)
         self.k1d_m.setRange(1e-6, 100.0)
         self.k1d_m.setSingleStep(1e-2)
         self.k1d_m.setValue(self.kalman_1d_measurement_noise)
         self.k1d_m.valueChanged.connect(self.on_kalman_params_changed)
-        kalman_grid.addWidget(self.k1d_m, 1, 3)
+        kalman_grid.addWidget(self.k1d_m, 3, 1)
         smooth_layout.addLayout(kalman_grid)
 
         ema_grid = QGridLayout()
@@ -844,14 +855,14 @@ class StereoHandTrackerGUI(QMainWindow):
         self.ema3d_alpha_spin.valueChanged.connect(self.on_ema_params_changed)
         ema_grid.addWidget(self.ema3d_alpha_spin, 0, 1)
 
-        ema_grid.addWidget(QLabel("EMA Ang α"), 0, 2)
+        ema_grid.addWidget(QLabel("EMA Ang α"), 1, 0)
         self.ema1d_alpha_spin = QDoubleSpinBox()
         self.ema1d_alpha_spin.setDecimals(3)
         self.ema1d_alpha_spin.setRange(0.01, 1.0)
         self.ema1d_alpha_spin.setSingleStep(0.01)
         self.ema1d_alpha_spin.setValue(self.ema_1d_alpha)
         self.ema1d_alpha_spin.valueChanged.connect(self.on_ema_params_changed)
-        ema_grid.addWidget(self.ema1d_alpha_spin, 0, 3)
+        ema_grid.addWidget(self.ema1d_alpha_spin, 1, 1)
         smooth_layout.addLayout(ema_grid)
         self.jitter_label = QLabel("Jitter: N/A")
         self.jitter_label.setStyleSheet("color: #aaa;")
@@ -900,6 +911,7 @@ class StereoHandTrackerGUI(QMainWindow):
         ports_info.setStyleSheet("color: #aaa; ")
         udp_layout.addWidget(ports_info)
         self.lsl_info = QLabel("LSL: StereoHandTracker_Landmarks / _Angles")
+        self.lsl_info.setWordWrap(True)
         self.lsl_info.setStyleSheet("color: #aaa; ")
         udp_layout.addWidget(self.lsl_info)
         self.udp_status = QLabel("Broadcasting: Disabled")
@@ -1005,9 +1017,10 @@ class StereoHandTrackerGUI(QMainWindow):
         return getattr(self.tracker, "cam_mgr", None) if self.tracker is not None else None
 
     def _on_inference_toggled(self, enabled):
+        self.landmark_panel.invalidate("Waiting for inference" if enabled else "Inference off", clear_observations=True)
         self._inference_error = None
         if self._proc_thread is not None:
-            self._proc_thread.set_inference_enabled(enabled)
+            self._proc_thread.set_inference_enabled(enabled and not self._dashboard_modes.uses_regions)
         if self._wilor_session is not None:
             self._wilor_session.set_inference_enabled(enabled)
         manager = self._capture_manager()
@@ -1020,6 +1033,9 @@ class StereoHandTrackerGUI(QMainWindow):
         self._wilor_3d_key = None
         if not enabled:
             self.update_3d_view([], [])
+        else:
+            self._dashboard_modes.error = None
+        self._dashboard_modes.apply()
 
     def _toggle_recording(self):
         manager = self._capture_manager()
@@ -1285,16 +1301,15 @@ class StereoHandTrackerGUI(QMainWindow):
             self.show_3d_checkbox.setChecked(False)
             return
         self.show_3d_view = checked
-        if checked:
-            self.vis_3d_label.show()
-        else:
-            self.vis_3d_label.hide()
+        self.vis_3d_label.setVisible(bool(checked) and self.analysis_tabs.currentIndex() == 0)
         self._queue_display_refresh()
 
     def on_overlay_toggled(self, checked):
         self.show_raw_filtered_overlay = checked
 
     def on_mp_params_changed(self):
+        if hasattr(self, "_dashboard_modes") and self.tracker:
+            self._dashboard_modes.apply()
         if self.tracker:
             if self._proc_thread is not None:
                 self._proc_thread.request_params(self.min_det_spin.value(), self.min_track_spin.value())
@@ -1562,6 +1577,7 @@ class StereoHandTrackerGUI(QMainWindow):
     def _on_model_selected(self, *_):
         self.inference_model = self.model_combo.currentData()
         self._sync_model_controls()
+        self._dashboard_modes.changed()
         if self.inference_model == "mediapipe":
             self.udp_status.setText("UDP: active" if self.udp_enabled else "UDP: disabled")
 
@@ -1583,6 +1599,7 @@ class StereoHandTrackerGUI(QMainWindow):
             self._set_reconstruction_available(False)
 
     def _start_wilor(self):
+        self._landmarks.reset("Waiting for WiLoR inference")
         from handtrack.applications._wilor_multicam import WiLoRCameraSession
         if self._wilor_session is not None:
             return
@@ -1592,6 +1609,7 @@ class StereoHandTrackerGUI(QMainWindow):
         self._wilor_session.set_inference_enabled(self.inference_checkbox.isChecked())
         self.tracker = self._wilor_session
         self._wilor_grid_ready = False
+        self._analysis_wilor_packet = None
         self._wilor_draw_packet = None
         self._wilor_draw_cache.clear()
         self._wilor_3d_key = None
@@ -1613,6 +1631,7 @@ class StereoHandTrackerGUI(QMainWindow):
         self.timer.start(33)
 
     def _finish_wilor(self):
+        self.landmark_panel.invalidate("WiLoR capture stopped")
         session = self._wilor_session
         if session is None or session.is_alive():
             return
@@ -1625,6 +1644,7 @@ class StereoHandTrackerGUI(QMainWindow):
         session.join(timeout=0)
         self.illumination_panel.bind_manager(None)
         self._wilor_session = None
+        self._analysis_wilor_packet = None
         self._wilor_draw_packet = None
         self._wilor_draw_cache.clear()
         self.tracker = None
@@ -1667,11 +1687,14 @@ class StereoHandTrackerGUI(QMainWindow):
         packet, state, error = session.snapshot()
         snapshots = session.raw_snapshots()
         if not self.inference_checkbox.isChecked():
+            self.landmark_panel.invalidate("Inference off", clear_observations=True)
             self._display_raw_cameras(snapshots)
             return
         matched = self.wilor_view_combo.currentData() == "matched" and packet is not None and not error
         now = time.perf_counter()
         for index, ((live_frame, _), label) in enumerate(zip(snapshots, self.video_labels)):
+            if self.analysis_tabs.currentIndex() != 0:
+                break
             if not self.camera_preview_checkbox.isChecked():
                 break
             if live_frame is None:
@@ -1729,12 +1752,18 @@ class StereoHandTrackerGUI(QMainWindow):
             self.fps_label.setText("WiLoR unavailable" if error else
                                    f"{device} | {session.stage_seconds:.0f}s in stage")
             self.timing_label.setText("Live camera preview; no inference result yet")
-        hands = tuple(hand for hand in packet.calibrated_hands
-                      if self._hand_matches_preference(hand.handedness)) if packet is not None and not error else ()
+        analysis_hands = packet.calibrated_hands if packet is not None and not error and session.calibration_available else ()
         fresh_cameras = {c for c, (frame, _) in enumerate(snapshots) if frame is not None}
-        hands = tuple(hand for hand in hands if len(set(hand.cameras) & fresh_cameras) >= 2)
+        analysis_hands = tuple(hand for hand in analysis_hands if len(set(hand.cameras) & fresh_cameras) >= 2)
         if packet is not None and now-packet.finished_at > max(1., 2*packet.inference_seconds):
-            hands = ()
+            analysis_hands = ()
+        hands = tuple(hand for hand in analysis_hands if self._hand_matches_preference(hand.handedness))
+        if packet is not None and packet is not self._analysis_wilor_packet:
+            self._analysis_wilor_packet = packet
+            if error:
+                self.landmark_panel.invalidate("WiLoR inference unavailable")
+            else:
+                self._landmarks.wilor(packet, session.camera_indices, analysis_hands)
         if hands and session.calibration_available:
             stamps = [packet.received_at[c] for hand in hands for c in hand.cameras
                       if packet.received_at[c] is not None]
@@ -1747,7 +1776,7 @@ class StereoHandTrackerGUI(QMainWindow):
                           for hand in hands))
             key = (id(packet), self.hand_preference, self.show_3d_top, self.show_3d_front,
                    self.show_3d_side, self.show_3d_iso, self.show_3d_palm, self.show_3d_view)
-            if self.show_3d_view and key != self._wilor_3d_key:
+            if self.show_3d_view and self.analysis_tabs.currentIndex() == 0 and key != self._wilor_3d_key:
                 self.update_3d_view([hand.joints for hand in hands], [hand.joints for hand in hands],
                                     meshes=[hand.vertices for hand in hands], faces=session.faces)
                 self._wilor_3d_key = key
@@ -1859,29 +1888,13 @@ class StereoHandTrackerGUI(QMainWindow):
         if self.inference_model == "wilor":
             return self._start_wilor()
         try:
-            if self.inference_checkbox.isChecked() and not self._mediapipe_ready:
-                self._mediapipe_ready, self._mediapipe_error = (
-                    _preload_mediapipe_runtime()
-                )
-                if not self._mediapipe_ready:
-                    msg = (
-                        "MediaPipe preload failed. "
-                        "Try running from PowerShell/CMD (not MINGW/MSYS), "
-                        "ensure VC++ Redistributable 2015-2022 is installed, "
-                        "and install the pinned dependency `mediapipe==0.10.14`."
-                    )
-                    self.status_label.setText(f"Status: Error - {msg}")
-                    print(f"Error starting tracker: {msg}")
-                    print(f"MediaPipe preload detail: {self._mediapipe_error}")
-                    return
-
             MultiCameraTracker = _get_multi_camera_tracker_class()
             self.tracker = MultiCameraTracker()
             self.tracker.max_reprojection_error = self.occlusion_spin.value()
             if not self.tracker.initialize_cameras(
                 min_det_conf=self.min_det_spin.value(),
                 min_track_conf=self.min_track_spin.value(),
-                inference_enabled=self.inference_checkbox.isChecked(),
+                inference_enabled=False,
             ):
                 self.status_label.setText("Status: Camera init failed")
                 return
@@ -1905,9 +1918,11 @@ class StereoHandTrackerGUI(QMainWindow):
             self._show_calibration_status()
             # Start background processing thread
             self._proc_thread = ProcessingThread(self.tracker)
-            self._proc_thread.set_inference_enabled(self.inference_checkbox.isChecked())
+            self._proc_thread.set_inference_enabled(
+                self.inference_checkbox.isChecked() and not self._dashboard_modes.uses_regions)
             self.tracker.cam_mgr.inference_enabled = self.inference_checkbox.isChecked()
             self._proc_thread.start()
+            self._dashboard_modes.start()
             # Start GUI refresh timer (~60 Hz display rate)
             self.timer.start(16)
         except Exception as e:
@@ -1924,6 +1939,7 @@ class StereoHandTrackerGUI(QMainWindow):
 
     def stop_tracking(self):
         """Stop tracking."""
+        self._dashboard_modes.stop()
         manager = self._capture_manager()
         if self._record_stop_thread is not None:
             self._stop_after_recording = True
@@ -1977,6 +1993,8 @@ class StereoHandTrackerGUI(QMainWindow):
         if not self.tracker or self._proc_thread is None:
             self.stop_tracking()
             return
+        if self._dashboard_modes.tick():
+            return
         if self._proc_thread.error and self.inference_checkbox.isChecked():
             error = self._proc_thread.error
             self.inference_checkbox.setChecked(False)
@@ -1994,7 +2012,10 @@ class StereoHandTrackerGUI(QMainWindow):
         try:
             latest = self._proc_thread.get_latest()
             if latest is None:
-                return  # No new frame yet — skip this timer tick
+                if self._proc_thread.warming_up:
+                    self._dashboard_modes._render_raw(self._dashboard_modes.manager())
+                    self.status_label.setText("Loading MediaPipe hands… · cameras running")
+                return
             frames, triangulated_hands_data, all_results, valid_2d_landmarks = latest
             if not self.tracker.calibration_available:
                 triangulated_hands_data = []
@@ -2087,12 +2108,22 @@ class StereoHandTrackerGUI(QMainWindow):
                     self._last_joint_angles = joint_angles
                     # Debug output moved to finger_splay_angles function
 
+            # Analysis uses the same estimates and matching source receipt times.
+            masks = [(np.asarray(data[4]) >= 2) & np.isfinite(data[3])
+                     for data in triangulated_hands_data]
+            self._landmarks.legacy(
+                frames, all_results, filtered_hands, handedness_labels[:len(filtered_hands)], masks,
+                getattr(self.tracker, "camera_ids", range(len(frames))),
+                getattr(self._proc_thread, "result_received_at", ()),
+                getattr(self._proc_thread, "result_timestamp", None))
             # Broadcast
             if self.udp_enabled or self.lsl_broadcaster:
                 self.broadcast_landmarks(frame_landmarks, num_hands)
                 self.broadcast_joint_angles(hand_angle_packets)
             # Display frames
             for idx, (frame, results) in enumerate(zip(frames, all_results)):
+                if self.analysis_tabs.currentIndex() != 0:
+                    break
                 if not self.camera_preview_checkbox.isChecked():
                     break
                 if frame is None or idx >= len(self.video_labels):
@@ -2210,7 +2241,7 @@ class StereoHandTrackerGUI(QMainWindow):
                     self.jitter_label.setText(
                         f"Jitter (raw/filtered): {raw_std:.4f} / {filt_std:.4f}"
                     )
-            if self.show_3d_view and triangulated_hands_data:
+            if self.show_3d_view and triangulated_hands_data and self.analysis_tabs.currentIndex() == 0:
                 self.update_3d_view(raw_hands, filtered_hands)
             self.frame_count += 1
             self.frame_label.setText(f"Frames: {self.frame_count}")
@@ -2619,6 +2650,12 @@ class StereoHandTrackerGUI(QMainWindow):
 
     def closeEvent(self, event):
         """Handle window close."""
+        if self._dashboard_modes.closing():
+            self.stop_tracking()
+            self.status_label.setText("Waiting for inference model cleanup…")
+            event.ignore()
+            QTimer.singleShot(100, self.close)
+            return
         self._closing_capture = True
         if self._wilor_session is not None:
             self._closing_wilor = True
@@ -2633,6 +2670,7 @@ class StereoHandTrackerGUI(QMainWindow):
         if self._capture_control is not None:
             self._capture_control_timer.stop()
             self._capture_control.close()
+        self.landmark_panel.timer.stop()
         event.accept()
 
 
@@ -2669,16 +2707,19 @@ def main(argv=None):
         help="Enable splay-angle computation and streaming (default: False).",
     )
     parser.add_argument("--model", choices=("mediapipe", "wilor"), default="mediapipe")
+    parser.add_argument("--mode", choices=("hands", "pose", "face", "holistic"), default="hands")
     parser.add_argument("--wilor-root")
     parser.add_argument("--wilor-device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--wilor-fast", action="store_true")
     parser.add_argument("--wilor-batch-size", type=int, choices=range(1, 17), default=2)
     args = parser.parse_args(argv)
+    if args.model == "wilor" and args.mode != "hands":
+        parser.error("WiLoR supports hands only")
     configure_high_dpi()
     app = QApplication(sys.argv)
     apply_dashboard_palette(app)
     window = StereoHandTrackerGUI(
-        calc_splay=args.calc_splay, model=args.model, wilor_root=args.wilor_root,
+        calc_splay=args.calc_splay, model=args.model, mode=args.mode, wilor_root=args.wilor_root,
         wilor_device=args.wilor_device, wilor_fast=args.wilor_fast,
         wilor_batch_size=args.wilor_batch_size)
     window.show()

@@ -206,7 +206,7 @@ def test_gui_studio_opt_in_preserves_non_hand_modes_and_video(monkeypatch):
 
 
 @pytest.mark.parametrize("args", [
-    ["gui", "--backend", "webcam", "--mode", "pose"],
+    ["gui", "--backend", "webcam", "--mode", "unknown"],
     ["gui", "--backend", "webcam", "--source", "clip.mp4"],
     ["gui", "--backend", "optitrack", "--studio"],
     ["gui", "--studio", "--advanced-hands"],
@@ -227,9 +227,22 @@ def test_default_wilor_gui_uses_optitrack_dashboard_when_available(monkeypatch):
     assert "--model" in calls[0][1] and "wilor" in calls[0][1]
 
 
-def test_default_wilor_webcam_reports_unsupported_dashboard(monkeypatch, capsys):
+def test_default_wilor_webcam_routes_to_dashboard(monkeypatch):
+    calls = []
     monkeypatch.setattr(_cli, "_optitrack_sdk_available", lambda: False)
-    with pytest.raises(SystemExit) as result:
-        _cli.main(["gui", "--model", "wilor"])
-    assert result.value.code == 2
-    assert "WiLoR multi-camera" in capsys.readouterr().err
+    monkeypatch.setattr(_cli, "_run_module_entrypoint",
+                        lambda module, argv=None: calls.append((module, argv)) or 0)
+    assert _cli.main(["gui", "--model", "wilor"]) == 0
+    assert calls[0][0] == _cli._BACKEND_ENTRYPOINTS["webcam"]["gui"]
+    assert "wilor" in calls[0][1]
+
+
+@pytest.mark.parametrize("backend", ["webcam", "optitrack"])
+@pytest.mark.parametrize("mode", ["pose", "face", "holistic"])
+def test_dashboard_mode_is_forwarded_to_each_backend(monkeypatch, backend, mode):
+    calls = []
+    monkeypatch.setattr(_cli, "_run_module_entrypoint",
+                        lambda module, argv=None: calls.append((module, argv)) or 0)
+    assert _cli.main(["gui", "--backend", backend, "--mode", mode]) == 0
+    assert calls[0][0] == _cli._BACKEND_ENTRYPOINTS[backend]["gui"]
+    assert calls[0][1][calls[0][1].index("--mode")+1] == mode

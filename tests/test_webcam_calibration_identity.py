@@ -78,3 +78,13 @@ def test_invalid_nested_webcam_metadata_is_rejected(tmp_path, field, value):
     np.savez(path, **data)
     with pytest.raises(ValueError):
         load_camera_calibration(path, count=3, webcam_settings=states)
+
+
+def test_settings_mismatch_reports_expected_and_actual_without_requiring_recapture(tmp_path):
+    path, states, _ = archive(tmp_path)
+    current = deepcopy(states)
+    current[1]['actual']['focus'] = 9
+    with pytest.raises(ValueError, match='source 1: focus: expected 11, got 9; restore'):
+        load_camera_calibration(path, count=3, webcam_settings=current)
+    with pytest.raises(ValueError, match='restore the calibrated resolution'):
+        load_camera_calibration(path, count=3, image_sizes=[(1280, 720)]*3, webcam_settings=states)

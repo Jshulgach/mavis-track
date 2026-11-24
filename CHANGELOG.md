@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Keep webcam calibration status visible independently of inference, distinguish loaded calibration from per-camera modes that pause rig 3D, and show expected/actual lens, format and resolution mismatches with restore guidance.
+
+- Add a shared Landmark tracker tab with named/searchable landmark selection, coordinate-labelled position/velocity/acceleration plots, bounded history, pause/clear controls and source-receipt timing. Reset derivative fits across loss, rejected points, identity changes and gaps; retain camera capture while switching tabs.
+
+- Match webcam display controls to OptiTrack with text zoom, monitor DPI refresh and fit/fill previews; wrap status text, stack smoothing fields and keep 3D previews within the window on small screens.
+
+- Add hands/body/face/combined MediaPipe selection and an independent inference toggle to both advanced camera dashboards. Load models and draw per-camera overlays in background workers without reopening cameras; disable calibrated hand outputs in region modes.
+- Add optional WiLoR hand mesh/joint inference to the multi-webcam dashboard using one shared model, with live raw feeds during loading and recoverable dependency errors.
+
 - Make the advanced hands dashboard the default GUI for webcam and OptiTrack backends; retain explicit Studio/demo previews and compatibility with --advanced-hands.
 - Reject underconstrained ChArUco layouts before fitting, handle intrinsic quality failures without a traceback, and resume webcam observation checkpoints without recapturing good intrinsics.
 - Reuse the OptiTrack dashboard theme and control groups in camera testing/calibration; make first-time webcam calibration lock current autofocus positions and verify readback before capture.
