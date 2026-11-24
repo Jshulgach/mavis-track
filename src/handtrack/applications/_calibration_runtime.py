@@ -130,9 +130,12 @@ def calibrate_stereo_pairs(all_corners, all_ids, board, matrices, dists, img_siz
                 images_b.append(cb[bb].reshape(-1, 1, 2).astype(np.float32))
         if len(objects) < 11:
             continue
+        # OpenCV uses the size argument only to initialize intrinsics. This
+        # solve fixes both lens fits and keeps each view in native pixels.
+        size = tuple(_image_sizes[a]) if _image_sizes is not None else img_size
         result = calibrate_stereo_robust(a, b, objects, images_a, images_b,
                                          matrices[a], dists[a], matrices[b], dists[b],
-                                         img_size, min_inliers=8)
+                                         size, min_inliers=8)
         _stereo_results.append(result)
         print(f"Stereo {a}-{b}: training RMS {result.rms:.3f} px; "
               f"held-out max {np.max(result.heldout_errors):.3f} px")
@@ -286,10 +289,6 @@ def main(backend, *, resume=None):
         _camera_ids = getattr(manager, "camera_indices", list(range(manager.num_cameras)))
         _image_sizes = np.asarray([manager.get_resolution(i) for i in range(manager.num_cameras)])
         _diagnostics = manager.get_camera_diagnostics() if hasattr(manager, "get_camera_diagnostics") else None
-        # Mixed dimensions require a separately designed stereo observation
-        # transform; fail explicitly rather than reuse camera 0's pixel scale.
-        if not np.all(_image_sizes == _image_sizes[0]):
-            raise ValueError("Stereo calibration currently requires matching camera resolutions")
         return calibrate_intrinsics(*args, **kwargs)
     saved = False
     def publish(*args, **kwargs):

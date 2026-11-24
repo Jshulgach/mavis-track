@@ -216,10 +216,7 @@ def run_capture(module):
         if hasattr(manager, "lock_geometry"):
             manager.lock_geometry()
         count = manager.num_cameras
-        sizes = [manager.get_resolution(i) for i in range(count)]
-        if any(size != sizes[0] for size in sizes):
-            raise ValueError("Choose the same actual webcam resolution before calibration")
-        image_size = manager.get_resolution(0)
+        image_size = manager.get_resolution(0)  # Reference size for callers with a single shared mode.
         preview = create_calibration_preview(
             manager, 'ChArUco Calibration', initial_exposure if initial_exposure is not None else 10)
         controls = preview.controls

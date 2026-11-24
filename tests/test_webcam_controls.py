@@ -1,6 +1,7 @@
 """USB webcam settings must use real readbacks, preserve native ownership and geometry."""
 import threading
 import time
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -126,6 +127,21 @@ def test_unknown_fps_does_not_prevent_a_confirmed_resolution():
     assert (actual["width"], actual["height"]) == (128, 96)
 
 
+def test_directshow_reapplies_format_if_fps_change_resets_it():
+    cap = Capture()
+    original = cap.set
+
+    def set_property(prop, value):
+        if prop == cv2.CAP_PROP_FPS:
+            cap.values[cv2.CAP_PROP_FOURCC] = cv2.VideoWriter_fourcc(*"YUY2")
+        return original(prop, value)
+
+    cap.set = set_property
+    accepted, errors, actual = settings.apply_settings(cap, {"fourcc": "MJPG", "fps": 15})
+    assert accepted == {"fourcc": "MJPG", "fps": 15}
+    assert not errors and actual["fourcc"] == "MJPG"
+
+
 def test_profile_roundtrip_and_validation(tmp_path):
     path = tmp_path / "settings.json"
     settings.save_profile([2, 0, 1], {"2": {"exposure": -7}, "0": {"autofocus": False, "focus": 11}},
@@ -243,7 +259,7 @@ def test_reconfigure_keeps_existing_capture_threads_and_opens_only_added_source(
         return cap
     monkeypatch.setattr(multi_webcam, "_open_camera", open_camera)
     monkeypatch.setattr(multi_webcam, "enumerate_devices", lambda **kwargs: [])
-    manager = multi_webcam.CameraManager([0, 1, 2], profile=tmp_path / "missing.json")
+    manager = multi_webcam.CameraManager([0, 1, 2], backend="dshow", profile=tmp_path / "missing.json")
     manager.start_all()
     original = {worker.cam_index: worker for worker in manager.workers}
     try:
@@ -272,7 +288,7 @@ def test_reconfigure_keeps_existing_capture_threads_and_opens_only_added_source(
 def test_reconfigure_failed_new_camera_keeps_healthy_streams(monkeypatch, tmp_path):
     monkeypatch.setattr(multi_webcam, "_open_camera", lambda *args: Capture())
     monkeypatch.setattr(multi_webcam, "enumerate_devices", lambda **kwargs: [])
-    manager = multi_webcam.CameraManager([0, 1], profile=tmp_path / "missing.json")
+    manager = multi_webcam.CameraManager([0, 1], backend="dshow", profile=tmp_path / "missing.json")
     manager.start_all()
     original = list(manager.workers)
     worker_class = multi_webcam.CameraWorker
@@ -290,3 +306,79 @@ def test_reconfigure_failed_new_camera_keeps_healthy_streams(monkeypatch, tmp_pa
         assert set(manager.get_frames_by_source()) == {0, 1}
     finally:
         manager.stop_all()
+
+
+def test_auto_uses_one_backend_and_first_frame_failure_keeps_other_sources_live(monkeypatch, tmp_path):
+    devices = [{"index": i, "name": f"Webcam {i}", "device_path": f"usb-{i}"} for i in range(4)]
+    monkeypatch.setattr(multi_webcam, "enumerate_devices", lambda **kwargs: devices)
+    monkeypatch.setattr(multi_webcam, "os", SimpleNamespace(name="nt"))
+    opened = {}
+    def open_camera(source, backend):
+        assert backend == "dshow"
+        if source == 2 and source in opened:
+            raise RuntimeError("USB stream unavailable")
+        camera = Capture()
+        opened[source] = camera
+        return camera
+    monkeypatch.setattr(multi_webcam, "_open_camera", open_camera)
+    manager = multi_webcam.CameraManager(profile=tmp_path / "missing.json")
+    try:
+        assert manager.backend == "dshow"
+        assert manager.camera_indices == [0, 1, 2, 3]
+        manager.start_all()
+        assert manager.camera_indices == [0, 1, 3]
+        assert manager.num_cameras == 3
+        assert "Webcam 2" in manager.startup_notice()
+        assert "USB stream unavailable" in manager.startup_notice()
+        assert set(manager.get_frames_by_source()) == {0, 1, 3}
+        assert all(w.is_alive() for w in manager.workers)
+        assert manager.get_settings_snapshot()[-1]["device_path"] == "usb-3"
+    finally:
+        manager.stop_all()
+
+
+@pytest.mark.parametrize("initial_start", [True, False])
+def test_setup_retries_failed_camera_at_lower_bandwidth(monkeypatch, tmp_path, initial_start):
+    monkeypatch.setattr(multi_webcam, "enumerate_devices", lambda **kwargs: [])
+    opened = {}
+
+    def open_camera(source, backend, *, mode=None):
+        assert backend == "dshow"
+        if source == 2 and mode is None:
+            raise RuntimeError("Not enough USB bandwidth")
+        capture = Capture()
+        opened.setdefault(source, []).append(capture)
+        if source == 2:
+            assert mode == {"width": 640, "height": 480, "fps": 15, "fourcc": "MJPG"}
+            assert all(not opened[i][-1].released for i in (0, 1, 3))
+        return capture
+
+    monkeypatch.setattr(multi_webcam, "_open_camera", open_camera)
+    path = tmp_path / "missing.json"
+    sources = [0, 1, 2, 3]
+    manager = multi_webcam.CameraManager(sources if initial_start else [0, 1, 3], backend="dshow", profile=path)
+    try:
+        manager.start_all(retry_bandwidth=initial_start)
+        if not initial_start:
+            manager.reconfigure(sources, retry_bandwidth=True)
+        assert manager.camera_indices == sources
+        assert manager.bandwidth_retry_notice and not manager.startup_notice()
+        assert len(opened[2]) == 1
+        assert all(len(opened[i]) == 2 for i in (0, 1, 3))
+        assert all(w.settings_snapshot()["actual"]["fps"] == 15 for w in manager.workers)
+        assert all(frame is not None for frame in manager.get_frames_by_source().values())
+        assert not path.exists()
+    finally:
+        manager.stop_all()
+
+
+def test_stale_setup_index_cannot_open_a_different_device(monkeypatch, tmp_path):
+    devices = [{"index": 0, "name": "Other webcam", "device_path": "usb-B"}]
+    monkeypatch.setattr(multi_webcam, "enumerate_devices", lambda **kwargs: devices)
+    def unexpected_open(*args):
+        pytest.fail("Opening this index would capture the wrong physical camera")
+    monkeypatch.setattr(multi_webcam, "_open_camera", unexpected_open)
+    manager = multi_webcam.CameraManager([0], backend="dshow", profile=tmp_path / "missing.json",
+                                        expected_paths={0: "usb-A"})
+    assert manager.camera_indices == []
+    assert "Device order changed" in manager.startup_notice()

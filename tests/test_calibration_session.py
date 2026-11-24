@@ -4,8 +4,9 @@ import cv2
 import numpy as np
 import pytest
 
-from handtrack.applications._calibration_session import CalibrationSession
 from handtrack.applications import _calibration_runtime as runtime
+from handtrack.applications._calibration_session import CalibrationSession
+from mavis_track.calibration import load_camera_calibration
 
 
 def _results(visible, count=4):
@@ -60,13 +61,20 @@ def test_bad_intrinsics_stop_before_alignment(monkeypatch):
         runtime.validate_intrinsic_quality()
 
 
-def test_staged_solver_publishes_sparse_pair_chain_with_fixed_intrinsics(monkeypatch,tmp_path):
+@pytest.mark.parametrize("sizes", [
+    [(1280, 1024)] * 3,
+    [(640, 480)] * 3 + [(320, 240)],
+], ids=["same_size", "mixed_size"])
+def test_staged_solver_publishes_sparse_pair_chain_with_fixed_intrinsics(monkeypatch, tmp_path, sizes):
     """Exercise real lens fits, stereo fits, graph solve and publication gates."""
-    count=3
+    count = len(sizes)
     board_points=np.zeros((20,3),np.float32)
     board_points[:,:2]=np.mgrid[1:6,1:5].T.reshape(-1,2)*.04
     board=SimpleNamespace(getChessboardCorners=lambda:board_points)
-    matrix=np.array([[900.,0,640],[0,900,512],[0,0,1]])
+    expected_matrices = [
+        np.array([[width * .703125, 0, width / 2], [0, width * .703125, height / 2], [0, 0, 1]])
+        for width, height in sizes
+    ]
     shifts=[np.array([-.2*camera,0.,0.]) for camera in range(count)]
     ids=np.arange(20,dtype=np.int32).reshape(-1,1)
     session=CalibrationSession(count,36)
@@ -74,49 +82,54 @@ def test_staged_solver_publishes_sparse_pair_chain_with_fixed_intrinsics(monkeyp
         rotation=np.array([.3*np.sin(index*.7),.4*np.cos(index*.4),.1*np.sin(index*.2)])
         position=np.array([-.15+.2*np.sin(index*.3),-.1+.15*np.cos(index*.5),.8+.3*(index%5)/4])
         for camera in range(count):
-            corners,_=cv2.projectPoints(board_points,rotation,position,matrix,np.zeros(5))
+            corners,_=cv2.projectPoints(board_points,rotation,position,expected_matrices[camera],np.zeros(5))
             session.intrinsic_corners[camera].append(corners.astype(np.float32))
             session.intrinsic_ids[camera].append(ids.copy())
-    for name,value in {'_image_sizes':None,'_camera_ids':None,'_diagnostics':None,
+    for name,value in {'_image_sizes':np.asarray(sizes),'_camera_ids':None,'_diagnostics':None,
+                       '_webcam_settings':None,
                        '_intrinsic_results':[],'_stereo_results':[], '_reserved_indices':[],
                        '_board_validation':None,'CHARUCO_SQUARE_LENGTH':.04,
                        'CHARUCO_MARKER_LENGTH':.03,'CALIBRATION_FILE':str(tmp_path/'latest.npz')}.items():
         monkeypatch.setattr(runtime,name,value,raising=False)
     matrices,dists=runtime.calibrate_intrinsics(
-        session.intrinsic_corners,session.intrinsic_ids,board,(1280,1024),count,
+        session.intrinsic_corners,session.intrinsic_ids,board,sizes[0],count,
         reserve_board_views=False)
     runtime.validate_intrinsic_quality()
     original_matrices=[m.copy() for m in matrices]
     original_dists=[d.copy() for d in dists]
     session.phase='alignment'
-    for pair in [(0,1),(1,2)]:
+    pairs = [(camera, camera + 1) for camera in range(count - 1)]
+    for pair in pairs:
         for index in range(36):
             rotation=np.array([.25*np.sin(index*.7),.3*np.cos(index*.4),.05*np.sin(index*.2)])
             position=np.array([-.05+.15*np.sin(index*.3),-.1+.1*np.cos(index*.5),1.2+.3*(index%5)/4])
             results=[]
             for camera in range(count):
-                corners,_=cv2.projectPoints(board_points,rotation,position+shifts[camera],matrix,np.zeros(5))
+                corners,_=cv2.projectPoints(board_points,rotation,position+shifts[camera],expected_matrices[camera],np.zeros(5))
                 results.append((True,(corners.astype(np.float32),ids))
                                if camera in pair else (False,(None,None)))
             session.capture(pair,results)
     rotations,translations=runtime.calibrate_stereo_pairs(
-        session.alignment_corners,session.alignment_ids,board,matrices,dists,(1280,1024),count,
+        session.alignment_corners,session.alignment_ids,board,matrices,dists,sizes[0],count,
         reserved_indices=session.reserved_indices)
-    assert [(p.camera_a,p.camera_b) for p in runtime._stereo_results]==[(0,1),(1,2)]
+    assert [(p.camera_a,p.camera_b) for p in runtime._stereo_results] == pairs
     for camera in range(count):
+        np.testing.assert_allclose(matrices[camera], expected_matrices[camera], atol=.5)
         np.testing.assert_array_equal(matrices[camera],original_matrices[camera])
         np.testing.assert_array_equal(dists[camera],original_dists[camera])
         np.testing.assert_allclose(translations[camera].reshape(3),shifts[camera],atol=.003)
-    runtime.save_calibration(count,(1280,1024),180,matrices,dists,rotations,translations)
+    captures = sum(map(len, session.intrinsic_corners)) + len(session.alignment_corners[0])
+    runtime.save_calibration(count, sizes[0], captures, matrices, dists, rotations, translations)
     with np.load(tmp_path/'latest.npz',allow_pickle=False) as published:
         assert published['quality_passed'].item()
         assert published['board_validation_views']>=3
+        np.testing.assert_array_equal(published["image_sizes"], sizes)
     # Archived sparse observations can be replayed without a camera SDK or UI.
     from handtrack.applications._calibration_replay import replay_calibration
     archive=tmp_path/'observations.npz'
     session.write_observations(archive,
         SimpleNamespace(CHARUCO_SQUARE_LENGTH=.04,CHARUCO_MARKER_LENGTH=.03),
-        SimpleNamespace(get_resolution=lambda camera:(1280,1024)),board,'DICT_5X5_50',matrices,dists)
+        SimpleNamespace(get_resolution=lambda camera: sizes[camera]),board,'DICT_5X5_50',matrices,dists)
     previous_results=runtime._intrinsic_results
     replay_calibration(archive,tmp_path/'replayed.npz')
     assert runtime._intrinsic_results is previous_results
@@ -124,5 +137,16 @@ def test_staged_solver_publishes_sparse_pair_chain_with_fixed_intrinsics(monkeyp
     with np.load(tmp_path/'replayed.npz',allow_pickle=False) as replayed:
         assert replayed['quality_passed'].item()
         assert replayed['stereo_error_metric'].item()=='joint_board_pose_point_rms'
+        np.testing.assert_array_equal(replayed["image_sizes"], sizes)
         for camera in range(count):
             np.testing.assert_allclose(replayed[f'camera_matrix_{camera}'],matrices[camera])
+    order = list(reversed(range(count)))
+    live_sizes = [sizes[camera] for camera in order]
+    loaded, _, _, _, verified = load_camera_calibration(
+        tmp_path / "replayed.npz", count=count, camera_ids=order, image_sizes=live_sizes)
+    assert verified
+    np.testing.assert_allclose(loaded, [matrices[camera] for camera in order])
+    with pytest.raises(ValueError, match="Camera resolution differs"):
+        load_camera_calibration(
+            tmp_path / "replayed.npz", count=count, camera_ids=order,
+            image_sizes=[(800, 600), *live_sizes[1:]])

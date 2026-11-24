@@ -123,11 +123,11 @@ def _ranges(moniker, requested=None):
     return result
 
 
-def enumerate_devices(control_index=None, *, requested=None):
+def enumerate_devices(control_index=None, *, requested=None, expected_path=""):
     """Match the system enumerator order used by OpenCV's DirectShow backend."""
     if os.name != "nt":
         return []
-    ole = C.OleDLL("ole32")
+    ole = C.WinDLL("ole32")
     automation = C.OleDLL("oleaut32")
     ole.CoInitializeEx.argtypes = [C.c_void_p, C.c_ulong]
     ole.CoInitializeEx.restype = C.c_long
@@ -156,9 +156,12 @@ def enumerate_devices(control_index=None, *, requested=None):
                 break
             try:
                 index = len(result)
+                path = _property(moniker, "DevicePath", automation)
+                inspect = index == control_index and (
+                    not expected_path or device_identity(path) == device_identity(expected_path))
                 result.append({"index": index, "name": _property(moniker, "FriendlyName", automation),
-                                   "device_path": _property(moniker, "DevicePath", automation),
-                                   "controls": _ranges(moniker, requested) if index == control_index else {}})
+                               "device_path": path,
+                               "controls": _ranges(moniker, requested) if inspect else {}})
             finally:
                 _release(moniker)
         return result
@@ -171,12 +174,77 @@ def enumerate_devices(control_index=None, *, requested=None):
             ole.CoUninitialize()
 
 
-def apply_controls(index, requested):
+def enumerate_media_foundation():
+    """Read the video device order used by OpenCV's Media Foundation backend."""
+    if os.name != "nt":
+        return []
+    ole = C.WinDLL("ole32")
+    try:
+        platform = C.WinDLL("mfplat")
+        mf = C.WinDLL("mf")
+    except OSError:
+        return []  # Media Foundation components are optional on some Windows editions.
+    pointer = C.c_void_p
+    device_array = C.POINTER(pointer)()
+    attributes = pointer()
+    count = C.c_ulong()
+    ole.CoTaskMemFree.argtypes = (pointer,)
+    ole.CoTaskMemFree.restype = None
+    initialized = ole.CoInitializeEx(None, 0)
+    if initialized < 0 and initialized & 0xFFFFFFFF != 0x80010106:
+        return []
+    started = False
+    try:
+        if platform.MFStartup(0x00020070, 0) < 0:
+            return []
+        started = True
+        if platform.MFCreateAttributes(C.byref(attributes), 1) < 0:
+            return []
+        source_type = GUID("c60ac5fe-252a-478f-a0ef-bc8fa5f7cad3")
+        video_type = GUID("8ac3587a-4ae7-42d8-99e0-0a6013eef90f")
+        if _call(attributes, 24, C.c_long, (C.POINTER(GUID), C.POINTER(GUID)),
+                 C.byref(source_type), C.byref(video_type)) < 0:
+            return []
+        if mf.MFEnumDeviceSources(attributes, C.byref(device_array), C.byref(count)) < 0:
+            return []
+        return [{"index": index, "controls": {},
+                 "name": _mf_string(pointer(device_array[index]), "60d0e559-52f8-4fa2-bbce-acdb34a8ec01", ole),
+                 "device_path": _mf_string(pointer(device_array[index]), "58f0aad8-22bf-4f8a-bb3d-d2c4978c6e2f", ole)}
+                for index in range(count.value)]
+    finally:
+        if device_array:
+            for index in range(count.value):
+                _release(pointer(device_array[index]))
+            ole.CoTaskMemFree(device_array)
+        _release(attributes)
+        if started:
+            platform.MFShutdown()
+        if initialized >= 0:
+            ole.CoUninitialize()
+
+
+def _mf_string(device, key, ole):
+    value, length = C.c_void_p(), C.c_ulong()
+    # IMFAttributes::GetAllocatedString
+    try:
+        hr = _call(device, 13, C.c_long, (C.POINTER(GUID), C.POINTER(C.c_void_p), C.POINTER(C.c_ulong)),
+                   C.byref(GUID(key)), C.byref(value), C.byref(length))
+        return C.wstring_at(value, length.value) if hr >= 0 and value else ""
+    finally:
+        ole.CoTaskMemFree(value)
+
+
+def device_identity(path):
+    """Compare Windows device interface paths across capture APIs."""
+    return path.casefold().removesuffix(r"\global")
+
+
+def apply_controls(index, requested, *, expected_path=""):
     """Fallback for drivers that require explicit IAM* manual/auto flags.
 
     OpenCV's DirectShow value setters pass flags=0, which some valid UVC drivers
     reject. Readback from the active capture still verifies manual values.
     """
-    info = next((device for device in enumerate_devices(index, requested=requested)
+    info = next((device for device in enumerate_devices(index, requested=requested, expected_path=expected_path)
                  if device["index"] == index), {})
     return info.get("controls", {})

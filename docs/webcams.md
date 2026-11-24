@@ -23,6 +23,12 @@ keeps your selection; **Start selected cameras** opens the checked sources again
 While stopped, toggles change the selection without opening cameras. Turning
 every source off stops all streams; select a source again or use Start to resume.
 
+**Retry with MJPEG / up to 15 FPS** is on by default. If a selected camera
+fails to start, Setup requests MJPEG and a lower frame rate for the selected
+cameras before retrying. Existing previews may pause briefly during the mode
+change. Check each camera's actual format and received FPS in Camera Controls.
+Uncheck the retry option to keep your preferred modes when a source fails.
+
 You can also enter source indices and use **Find / preview sources** to probe
 them. The continue action (**Start calibration** in calibration setup) requires the selected sources to be running, so an
 unapplied selection cannot be saved accidentally. The selection order becomes
@@ -65,10 +71,14 @@ mavis-track calibrate --backend webcam
 Camera setup opens first. New calibration does not require an existing
 calibration file or camera profile. Select and start the cameras, check that the
 printed board is sharp, then click **Start calibration**.
-Every selected camera must have the same **actual** resolution for the current stereo solver. After setup, webcams use the same
-staged calibration window as OptiTrack: individual camera intrinsics, then
-overlapping camera pairs. A three-camera chain such as 0–1 and 1–2 is sufficient;
-all three cameras do not have to see the board at once.
+Webcams can use different resolutions. Choose each camera's mode in **Camera
+Controls** and verify its actual resolution before starting calibration. For
+example, use 320×240 for the LifeCam and 640×480 for the other cameras. MAVIS
+fits and saves the calibration at each camera's native resolution. Keep those
+modes for tracking with that calibration.
+After setup, webcams use the same staged calibration window as OptiTrack:
+individual camera intrinsics, then overlapping camera pairs. A connected chain
+such as 0–1, 1–2 and 2–3 is sufficient for four cameras.
 
 Use the board dimensions configured for the webcam backend. Generate a matching
 board with `mavis-track board --backend webcam` and verify the printed square
@@ -120,6 +130,16 @@ Changed resolution, video format, device identity, focus or zoom prevents incomp
 ```powershell
 mavis-track gui --backend webcam
 ```
+
+The source numbers belong to the selected Windows capture backend. **Auto**
+chooses one backend for the group, preferring DirectShow when it discovers
+cameras there. Changing backends remaps cameras by device path where possible.
+Check the physical camera names next to the source numbers.
+
+If a selected camera fails during startup, the live dashboard keeps the working
+feeds and lists the failed source in **Camera Setup**. The camera setup dialog
+also keeps successful previews running. Uncheck failed sources before saving a
+different selection. Calibrated 3D still requires a compatible camera set.
 
 The advanced multi-camera hand-tracking view is the default for every camera backend.
 The older `--advanced-hands` flag remains accepted. **Start selected cameras** and

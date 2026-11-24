@@ -11,7 +11,8 @@ mavis-track calibrate --backend webcam
 mavis-track gui --backend webcam
 ```
 
-Use matching camera resolutions and a accurately printed ChArUco board.
+Set each camera to the video mode you intend to use for tracking and use an
+accurately printed ChArUco board. Webcam calibration supports mixed resolutions.
 The solver checks held-out reprojection errors, rejects failed candidates,
 preserves the prior calibration, and publishes a validated result atomically.
 Every fifth capture is reserved from all model fitting for a separate reconstructed
@@ -245,5 +246,5 @@ Calibrated reconstruction remains separate from independent WiLoR camera models.
 ## Windows USB webcam setup
 
 See [USB webcams](webcams.md) for source selection, native driver controls,
-video modes, shared staged calibration and saved settings. The default webcam
-Studio previews one source; use the advanced webcam GUI for calibrated multi-camera hands.
+video modes, shared staged calibration and saved settings. The default advanced
+dashboard supports calibrated multi-camera hands. Studio previews one source.

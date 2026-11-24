@@ -388,6 +388,7 @@ class StereoHandTrackerGUI(QMainWindow):
         camera_layout = QVBoxLayout(camera_group)
         self.camera_info_label = QLabel("Cameras: \u2014")
         self.camera_info_label.setStyleSheet("color: #aaa;")
+        self.camera_info_label.setWordWrap(True)
         camera_layout.addWidget(self.camera_info_label)
         self.camera_selection_button = QPushButton("Choose cameras…")
         self.camera_selection_button.clicked.connect(self._choose_webcams)
@@ -1011,9 +1012,18 @@ class StereoHandTrackerGUI(QMainWindow):
                 self.status_label.setText("Status: Camera init failed")
                 return
             self.num_cameras = self.tracker.num_cameras
-            self.camera_info_label.setText(
-                f"Cameras: {self.num_cameras}\nSources: {self.tracker.camera_ids}"
-            )
+            manager = self.tracker.cam_mgr
+            states = manager.get_settings_snapshot() if hasattr(manager, "get_settings_snapshot") else []
+            names = {state["source"]: state.get("device_name") for state in states}
+            self._camera_labels = {
+                source: f"Source {source} · {names.get(source) or 'Camera'}"
+                for source in self.tracker.camera_ids
+            }
+            started = [f"Cameras live: {self.num_cameras}", *self._camera_labels.values()]
+            notice = manager.startup_notice() if hasattr(manager, "startup_notice") else ""
+            if notice:
+                started.append("Failed to start: " + notice)
+            self.camera_info_label.setText("\n".join(started))
 
             # Dynamically populate video labels
             for i in reversed(range(self.video_layout.count())):
@@ -1029,6 +1039,8 @@ class StereoHandTrackerGUI(QMainWindow):
                     "background-color: #1a1a1a; border: 2px solid #333;"
                 )
                 label.setAlignment(Qt.AlignCenter)
+                source = self.tracker.camera_ids[idx]
+                label.setToolTip(self._camera_labels[source])
                 self.video_labels.append(label)
                 self.video_layout.addWidget(label, idx // cols, idx % cols)
 
@@ -1052,7 +1064,7 @@ class StereoHandTrackerGUI(QMainWindow):
                 cb.toggled.connect(lambda checked, i=idx: self._on_cam_enabled_toggled(i, checked))
                 self.cam_enabled_checkboxes.append(cb)
                 self.exposure_grid.addWidget(cb, idx + 1, 0)
-                self.exposure_grid.addWidget(QLabel(f"Camera {idx} / source {source}"), idx + 1, 1)
+                self.exposure_grid.addWidget(QLabel(self._camera_labels[source]), idx + 1, 1)
             # Apply current triangulation camera selection
             self.tracker.set_enabled_cameras(set(self.enabled_cameras))
             # Ensure LSL outlet exists even if UDP toggle is off
@@ -1290,7 +1302,7 @@ class StereoHandTrackerGUI(QMainWindow):
                                 cv2.circle(display_frame, pts[i], 4, (255, 255, 255), 1)
                 cv2.putText(
                     display_frame,
-                    f"Camera {idx}",
+                    f"Source {self.tracker.camera_ids[idx]}",
                     (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.7,

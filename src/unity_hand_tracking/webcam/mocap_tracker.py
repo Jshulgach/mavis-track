@@ -175,11 +175,18 @@ class MultiCameraTracker:
         self.num_cameras = self.cam_mgr.num_cameras
 
         if self.num_cameras == 0:
+            notice = self.cam_mgr.startup_notice() if hasattr(self.cam_mgr, "startup_notice") else ""
+            if notice:
+                raise RuntimeError(notice)
             print("No cameras detected.")
             self.cleanup()
             return False
 
         self.cam_mgr.start_all()
+        self.num_cameras = self.cam_mgr.num_cameras
+        if not self.num_cameras:
+            self.cleanup()
+            return False
         if hasattr(self.cam_mgr, "lock_geometry"):
             self.cam_mgr.lock_geometry()
         if hasattr(self.cam_mgr, "wait_ready"):
@@ -196,7 +203,7 @@ class MultiCameraTracker:
             self.load_calibration()
         except (OSError, ValueError) as exc:
             self.calibration_available = False
-            self.calibration_status = f"2D preview only — {exc}"
+            self.calibration_status = f"2D preview only - {exc}"
             self.camera_matrices, self.dist_coeffs = [], []
             self.R_matrices, self.T_vectors, self.projection_matrices = [], [], []
             print(self.calibration_status)
@@ -204,7 +211,7 @@ class MultiCameraTracker:
         # Sanity check: calibration camera count must match hardware
         if self.calibration_available and len(self.camera_matrices) != self.num_cameras:
             print(
-                f"⚠ Calibration has {len(self.camera_matrices)} cameras "
+                f"Warning: calibration has {len(self.camera_matrices)} cameras "
                 f"but {self.num_cameras} are connected."
             )
 
@@ -225,7 +232,7 @@ class MultiCameraTracker:
             thread_name_prefix="mp_detect",
         )
 
-        print(f"✓ {self.num_cameras} cameras initialised with threaded MediaPipe")
+        print(f"{self.num_cameras} cameras initialised with threaded MediaPipe")
         return True
 
     def update_mp_params(self, min_det_conf, min_track_conf):
