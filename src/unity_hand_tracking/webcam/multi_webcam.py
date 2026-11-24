@@ -27,7 +27,12 @@ from mavis_track._webcam_settings import (
     save_profile,
     validate_settings,
 )
-from mavis_track._webcam_windows import apply_controls, enumerate_devices
+from mavis_track._webcam_windows import (
+    apply_controls,
+    device_identity,
+    enumerate_devices,
+    enumerate_media_foundation,
+)
 
 
 def _get_windows_camera_count():
@@ -52,7 +57,22 @@ def _get_candidate_indices(indices=None):
     return list(dict.fromkeys(WEBCAM_INDICES)) or _default_candidate_indices()
 
 
-def _open_camera(index, backend="auto"):
+def _open_camera(index, backend="auto", *, mode=None):
+    if backend == "dshow" and mode:
+        # An uncompressed default stream may already exhaust the USB link.
+        # OpenCV 4.13 supports DirectShow width/height/FourCC at open time.
+        try:
+            capture = cv2.VideoCapture(index, cv2.CAP_DSHOW, [
+                cv2.CAP_PROP_FRAME_WIDTH, int(mode["width"]),
+                cv2.CAP_PROP_FRAME_HEIGHT, int(mode["height"]),
+                cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*mode["fourcc"]),
+            ])
+        except cv2.error:
+            pass  # Older OpenCV builds may reject open-time parameters.
+        else:
+            if capture.isOpened():
+                return capture
+            capture.release()
     return open_webcam(index, backend, factory=cv2.VideoCapture)
 
 import cv2
@@ -74,6 +94,24 @@ except ImportError:
     )
 
 
+def camera_inventory(backend):
+    """Resolve Auto once for the camera group, using that API's index order."""
+    if backend == "msmf":
+        return backend, enumerate_media_foundation()
+    devices = enumerate_devices()
+    if backend == "dshow" or os.name != "nt":
+        return backend, devices
+    if devices:
+        return "dshow", devices
+    devices = enumerate_media_foundation()
+    return ("msmf", devices) if devices else ("dshow", [])
+
+
+def matching_sources(devices, identity):
+    identity = device_identity(identity)
+    return [d["index"] for d in devices if identity and device_identity(d["device_path"]) == identity]
+
+
 class CameraWorker(FrameBuffer, threading.Thread):
     """Own the native capture, including settings writes, on one thread."""
 
@@ -83,6 +121,7 @@ class CameraWorker(FrameBuffer, threading.Thread):
         self.name = f"Camera #{cam_index}"
         self.exposure = exposure
         self.backend = backend
+        self.expected_path = ""
         self.initial_settings = dict(settings or {})
         if exposure is not None and "exposure" not in self.initial_settings:
             self.initial_settings.update(exposure=exposure, auto_exposure=False)
@@ -187,7 +226,9 @@ class CameraWorker(FrameBuffer, threading.Thread):
             with self.lock:
                 self._settings["confirmed"], self._settings["requested"], self._settings["unverified"] = {}, {}, {}
         else:
-            accepted, errors, actual = apply_settings(self.cap, settings, native=lambda values: apply_controls(self.cam_index, values))
+            accepted, errors, actual = apply_settings(
+                self.cap, settings, native=lambda values: apply_controls(
+                    self.cam_index, values, expected_path=self.expected_path))
         unverified = actual.pop("_unverified_controls", {})
         self._native_modes.update(actual.pop("_native_modes", {}))
         with self.lock:
@@ -211,17 +252,32 @@ class CameraWorker(FrameBuffer, threading.Thread):
         self._settle_until = time.perf_counter() + .35
         self.settings_revision += 1
 
+    def _verify_identity(self, info):
+        if self.expected_path and device_identity(info.get("device_path", "")) != device_identity(self.expected_path):
+            raise RuntimeError(f"Source {self.cam_index} changed device. Reopen camera setup to refresh the list.")
+
     def _capture(self):
-        info = next((d for d in enumerate_devices(control_index=self.cam_index)
-                     if d["index"] == self.cam_index), {}) if self.backend != "msmf" else {}
-        cap = _open_camera(self.cam_index, self.backend)
+        devices = (enumerate_devices(control_index=self.cam_index, expected_path=self.expected_path)
+                   if self.backend != "msmf"
+                   else enumerate_media_foundation())
+        info = next((d for d in devices if d["index"] == self.cam_index), {})
+        self._verify_identity(info)
+        if self.backend == "dshow" and {"width", "height", "fourcc"} <= self.initial_settings.keys():
+            cap = _open_camera(self.cam_index, self.backend, mode=self.initial_settings)
+        else:
+            cap = _open_camera(self.cam_index, self.backend)
         self.cap = cap
         if not cap.isOpened():
             raise RuntimeError(f"Camera index {self.cam_index} is unavailable")
         initial_actual, actual_backend = read_settings(cap), backend_name(cap)
+        if self.expected_path:
+            _, current = camera_inventory(self.backend)
+            self._verify_identity(next((d for d in current if d["index"] == self.cam_index), {}))
+            if actual_backend != self.backend.upper():
+                raise RuntimeError(f"Source {self.cam_index} opened with an unexpected backend: {actual_backend}")
         with self.lock:
             self._settings.update(actual=initial_actual, backend=actual_backend)
-            if "DSHOW" in actual_backend:
+            if actual_backend == "DSHOW" or self.backend == actual_backend.lower():
                 self._settings.update(capabilities=info.get("controls", {}),
                                       device_path=info.get("device_path", ""),
                                       device_name=info.get("name", ""))
@@ -313,87 +369,200 @@ class CameraManager:
                 best_balance = balance
         return best_cols
 
-    def __init__(self, indices=None, *, profile=None, backend=None):
+    def __init__(self, indices=None, *, profile=None, backend=None, expected_paths=None):
         self.profile = load_profile(profile)
         self.profile_file = profile
-        self.backend = backend or self.profile["backend"]
+        saved_backend = self.profile["backend"]
+        preferred = backend or saved_backend
         self.backend_kind = "webcam"
-        if self.backend == "auto" and self.profile.get("identities"):
-            self.backend = "dshow"
-        if self.backend == "msmf" and self.profile["backend"] != "msmf":
-            self.profile["cameras"], self.profile["identities"] = {}, {}
-        self.device_info = enumerate_devices() if self.backend != "msmf" else []
-        if indices is None and self.profile.get("identities"):
-            by_path = {device["device_path"]: device["index"] for device in self.device_info}
-            stored = self.profile["indices"]
-            identities = self.profile["identities"]
-            if all(identities.get(str(i)) in by_path for i in stored):
-                mapped = [by_path[identities[str(i)]] for i in stored]
-                self.profile["indices"] = mapped
-            else:
-                raise ValueError("Saved webcam devices are missing or changed. Open camera setup to select sources again.")
-        candidate_indices = _get_candidate_indices(indices if indices is not None else
-                                                   self.profile["indices"] or None)
+        self.backend, self.device_info = camera_inventory(preferred)
+        identities = self.profile.get("identities", {})
+        same_backend = saved_backend == self.backend or (saved_backend == "auto" and self.backend != "msmf")
+        self.discovery_errors = {}
+        self._unavailable_saved_indices = []
+        saved = self.profile["indices"]
+        if indices is None and saved:
+            indices = []
+            for source in saved:
+                path = identities.get(str(source))
+                mapped = matching_sources(self.device_info, path) if path else [source] if same_backend else []
+                if len(mapped) == 1 and mapped[0] not in indices:
+                    indices.append(mapped[0])
+                else:
+                    self._unavailable_saved_indices.append(source)
+        if indices is None and self.device_info:
+            indices = [device["index"] for device in self.device_info[:16]]
+        candidate_indices = _get_candidate_indices(indices)
+
+        saved_paths = {device_identity(path): self.profile["cameras"].get(source, {})
+                       for source, path in identities.items() if path}
+        self._device_paths = {d["index"]: d["device_path"] for d in self.device_info if d["device_path"]}
+        if same_backend and identities:
+            self.profile["cameras"] = {
+                str(i): saved_paths[device_identity(path)] for i, path in self._device_paths.items()
+                if device_identity(path) in saved_paths}
+        elif not same_backend:
+            self.profile["cameras"] = {}
 
         self.camera_indices = []
-        self.discovery_errors = {}
+        self._eligible_indices = []
         for idx in candidate_indices:
+            expected = (expected_paths or {}).get(idx)
+            if expected and device_identity(self._device_paths.get(idx, "")) != device_identity(expected):
+                self.discovery_errors[idx] = "Device order changed. Reopen camera setup to refresh the list."
+                continue
+            self._eligible_indices.append(idx)
             try:
-                cap = _open_camera(idx, self.backend)
-                opened = cap.isOpened()
-                cap.release()
-                if opened:
-                    self.camera_indices.append(idx)
+                mode = self.profile["cameras"].get(str(idx), {})
+                if self.backend == "dshow" and {"width", "height", "fourcc"} <= mode.keys():
+                    cap = _open_camera(idx, self.backend, mode=mode)
+                else:
+                    cap = _open_camera(idx, self.backend)
+                try:
+                    if not cap.isOpened():
+                        raise RuntimeError(f"Cannot open source {idx} with {self.backend}")
+                finally:
+                    cap.release()
+                self.camera_indices.append(idx)
             except (RuntimeError, cv2.error) as exc:
                 self.discovery_errors[idx] = str(exc)
-
-        if self.profile.get("identities"):
-            by_path = {str(d["index"]): d["device_path"] for d in self.device_info}
-            old = dict(self.profile["cameras"])
-            saved_paths = self.profile["identities"]
-            self.profile["cameras"] = {
-                str(i): next((old.get(source, {}) for source, path in saved_paths.items()
-                              if path == by_path.get(str(i))), {})
-                for i in self.camera_indices
-            }
         self.num_cameras = len(self.camera_indices)
-        if indices is None and self.profile["indices"] and self.camera_indices != self.profile["indices"]:
-            raise ValueError("A saved webcam is unavailable. Reopen camera setup and verify the source selection.")
         print(f"Detected {self.num_cameras} webcam(s): {self.camera_indices}")
 
+        self._probed_indices = list(self.camera_indices)
+        self.startup_errors = dict(self.discovery_errors)
+        self.bandwidth_retry_notice = ""
         self.workers = []
+        self._stopping_workers = []
 
-    def start_all(self, exposure=CAMERA_EXPOSURE, mjpeg_mode=None):
-        """Create and start a CameraWorker for every detected webcam."""
+    def _start_worker(self, source, exposure, settings):
+        # Do not overlap native startup and settings negotiation for new streams.
+        self._stopping_workers = [w for w in self._stopping_workers if w.is_alive()]
+        if any(w.cam_index == source for w in self._stopping_workers):
+            self.startup_errors[source] = "Previous camera worker is still stopping"
+            return None
+        worker = CameraWorker(source, exposure=exposure, backend=self.backend, settings=settings)
+        worker.expected_path = self._device_paths.get(source, "")
+        worker.start()
+        worker.ready.wait(timeout=10)
+        if worker.frame_timestamp is not None and worker.is_alive():
+            self.startup_errors.pop(source, None)
+            return worker
+        worker.stop()
+        worker.join(timeout=3)
+        if worker.is_alive():
+            self._stopping_workers.append(worker)
+        self.startup_errors[source] = worker.error or "Timed out waiting for the first frame"
+        return None
+
+    def startup_notice(self, indices=None):
+        names = {d["index"]: d.get("name") for d in self.device_info}
+        messages = [f"Source {source} ({names.get(source) or 'camera'}): {reason}"
+                    for source, reason in self.startup_errors.items() if indices is None or source in indices]
+        if indices is None:
+            messages.extend(f"Saved webcam formerly at source {source} is missing or ambiguous"
+                            for source in self._unavailable_saved_indices)
+        return "; ".join(messages)
+
+    @staticmethod
+    def _bandwidth_settings(settings, width=640, height=480):
+        return {**settings, "width": settings.get("width", width),
+                "height": settings.get("height", height), "fourcc": "MJPG",
+                "fps": min(settings.get("fps", 15), 15)}
+
+    def _retry_low_bandwidth(self, sources, existing, exposure, settings):
+        """Reclaim USB bandwidth on live previews before reopening failed sources."""
+        if not sources:
+            return
+        self.bandwidth_retry_notice = "Requested MJPEG and up to 15 FPS after a startup failure."
+        for source, worker in list(existing.items()):
+            state = worker.settings_snapshot()
+            actual = state["actual"]
+            if state["pending"] or not actual.get("width") or not actual.get("height"):
+                continue
+            old_mode = {**state["requested"], "width": int(actual["width"]), "height": int(actual["height"])}
+            if actual["fourcc"] in ("MJPG", "YUY2", "YUYV"):
+                old_mode["fourcc"] = actual["fourcc"]
+            if actual["fps"] is not None:
+                old_mode["fps"] = actual["fps"]
+            reduced = self._bandwidth_settings(old_mode)
+            if old_mode.get("fourcc") == "MJPG" and old_mode.get("fps", 30) <= 15:
+                continue
+            revision = state["revision"]
+            try:
+                worker.request_settings({key: reduced[key] for key in ("width", "height", "fourcc", "fps")})
+            except (ValueError, RuntimeError):
+                continue
+            deadline = time.perf_counter() + 5
+            while worker.is_alive() and time.perf_counter() < deadline:
+                state = worker.settings_snapshot()
+                frame, _ = worker.get_snapshot()
+                if state["revision"] > revision and not state["pending"] and frame is not None:
+                    break
+                time.sleep(.03)
+            else:
+                # If re-negotiation stalled this preview, restore its original mode.
+                worker.stop()
+                worker.join(timeout=3)
+                existing.pop(source)
+                if worker.is_alive():
+                    self._stopping_workers.append(worker)
+                    self.startup_errors[source] = "Camera could not restart after the bandwidth adjustment"
+                else:
+                    restored = self._start_worker(source, exposure, old_mode)
+                    if restored is not None:
+                        existing[source] = restored
+
+        for source in sources:
+            original_reason = self.startup_errors.get(source, "No first frame")
+            mode = self._bandwidth_settings(settings.get(str(source), {}))
+            worker = self._start_worker(source, exposure, mode)
+            if worker is not None:
+                existing[source] = worker
+            else:
+                retry_reason = self.startup_errors[source]
+                self.startup_errors[source] = f"{original_reason}. MJPEG / lower-FPS retry: {retry_reason}"
+
+    def start_all(self, exposure=CAMERA_EXPOSURE, mjpeg_mode=None, *, retry_bandwidth=False):
+        """Keep healthy sources live even if a selected source fails to start."""
         _ = mjpeg_mode
         if self.workers:
             return self.workers
-        for cam_index in self.camera_indices:
-            worker = CameraWorker(cam_index, exposure=exposure, backend=self.backend,
-                                  settings=self.profile["cameras"].get(str(cam_index), {}))
-            worker.start()
-            self.workers.append(worker)
-            print(f"Started worker for webcam index {cam_index}")
-        for worker in self.workers:
-            worker.ready.wait(timeout=10)
-            if worker.frame_timestamp is None:
-                self.stop_all()
-                raise RuntimeError(f"{worker.name} did not provide a frame: {worker.error}")
+        for source in self._probed_indices:
+            worker = self._start_worker(source, exposure, self.profile["cameras"].get(str(source), {}))
+            if worker is not None:
+                self.workers.append(worker)
+                print(f"Started worker for webcam index {source}")
+        self.bandwidth_retry_notice = ""
+        if retry_bandwidth:
+            existing = {worker.cam_index: worker for worker in self.workers}
+            missing = [source for source in self._eligible_indices if source not in existing]
+            self._retry_low_bandwidth(missing, existing, exposure, self.profile["cameras"])
+            self.workers = [existing[source] for source in self._eligible_indices if source in existing]
+        self.camera_indices = [worker.cam_index for worker in self.workers]
+        self.num_cameras = len(self.workers)
+        notice = self.startup_notice()
+        if notice:
+            print(notice)
+            if not self.workers:
+                raise RuntimeError(notice)
         return self.workers
 
     def stop_all(self):
         """Stop every worker and wait for cleanup."""
         print("Shutting down webcam workers...")
-        for worker in self.workers:
+        owned_workers = self.workers + self._stopping_workers
+        for worker in owned_workers:
             worker.stop()
-        for worker in self.workers:
+        for worker in owned_workers:
             worker.join(timeout=3)
-        alive = [worker.name for worker in self.workers if worker.is_alive()]
+        alive = [worker.name for worker in owned_workers if worker.is_alive()]
         if alive:
             raise RuntimeError(f"Camera workers did not stop: {alive}")
         self.workers.clear()
+        self._stopping_workers.clear()
 
-    def reconfigure(self, indices, *, settings=None):
+    def reconfigure(self, indices, *, settings=None, expected_paths=None, retry_bandwidth=False):
         """Change only added/removed sources, retaining existing capture threads.
 
         Called by the setup executor while capture geometry is unlocked.
@@ -404,6 +573,9 @@ class CameraManager:
         if (len(indices) > 16 or len(set(indices)) != len(indices)
                 or any(type(i) is not int or not 0 <= i < 64 for i in indices)):
             raise ValueError("Choose up to 16 unique camera source indices")
+        if expected_paths and any(device_identity(self._device_paths.get(source, "")) != device_identity(path)
+                                  for source, path in expected_paths.items() if path):
+            raise RuntimeError("Camera identity changed. Reopen camera setup to refresh the list.")
         current = list(self.workers)
         if any(worker.geometry_locked for worker in current):
             raise ValueError("Stop tracking/calibration before changing camera sources")
@@ -420,32 +592,28 @@ class CameraManager:
         self.workers = list(existing.values())
         self.camera_indices = list(existing)
         self.num_cameras = len(self.workers)
-        errors = []
-        additions = []
+        failed = []
         for source in indices:
             if source in existing:
                 continue
-            worker = CameraWorker(source, exposure=CAMERA_EXPOSURE, backend=self.backend,
-                                  settings=(settings or {}).get(str(source),
-                                      self.profile["cameras"].get(str(source), {})))
-            worker.start()
-            additions.append(worker)
-        for worker in additions:
-            worker.ready.wait(timeout=10)
-            if worker.frame_timestamp is None:
-                worker.stop()
-                worker.join(timeout=3)
-                errors.append(f"{worker.name} did not provide a frame: {worker.error}")
-                # Keep a stuck native worker owned so subsequent cleanup can retry.
-                if worker.is_alive():
-                    existing[worker.cam_index] = worker
-                continue
-            existing[worker.cam_index] = worker
+            worker = self._start_worker(source, CAMERA_EXPOSURE,
+                                        (settings or {}).get(str(source), self.profile["cameras"].get(str(source), {})))
+            if worker is None:
+                failed.append(source)
+            else:
+                existing[source] = worker
+        self.bandwidth_retry_notice = ""
+        if retry_bandwidth:
+            effective = {**self.profile["cameras"], **(settings or {})}
+            self._retry_low_bandwidth(failed, existing, CAMERA_EXPOSURE, effective)
         self.workers = [existing[source] for source in indices if source in existing]
         self.camera_indices = [worker.cam_index for worker in self.workers]
         self.num_cameras = len(self.workers)
-        if errors:
-            raise RuntimeError("; ".join(errors))
+        self._probed_indices = indices
+        self._eligible_indices = indices
+        failed = [source for source in indices if source not in existing]
+        if failed:
+            raise RuntimeError(self.startup_notice(failed))
         return self.workers
 
     def get_frames_by_source(self):

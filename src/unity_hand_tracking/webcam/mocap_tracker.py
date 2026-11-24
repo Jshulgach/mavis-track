@@ -175,11 +175,18 @@ class MultiCameraTracker:
         self.num_cameras = self.cam_mgr.num_cameras
 
         if self.num_cameras == 0:
+            notice = self.cam_mgr.startup_notice() if hasattr(self.cam_mgr, "startup_notice") else ""
+            if notice:
+                raise RuntimeError(notice)
             print("No cameras detected.")
             self.cleanup()
             return False
 
         self.cam_mgr.start_all()
+        self.num_cameras = self.cam_mgr.num_cameras
+        if not self.num_cameras:
+            self.cleanup()
+            return False
         if hasattr(self.cam_mgr, "lock_geometry"):
             self.cam_mgr.lock_geometry()
         if hasattr(self.cam_mgr, "wait_ready"):

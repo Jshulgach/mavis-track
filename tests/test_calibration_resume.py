@@ -29,13 +29,14 @@ class Manager:
                         "zoom": 0, "autofocus": 0},
              "capabilities": {"focus": {"manual": True, "auto": True}}}
             for i in range(2)]
-        self.frames = [np.zeros((480, 640, 3), np.uint8)] * 2
+        self.frames = [np.zeros((480, 640, 3), np.uint8), np.zeros((240, 320, 3), np.uint8)]
 
     def get_settings_snapshot(self):
         return deepcopy(self.states)
 
     def get_resolution(self, camera):
-        return 640, 480
+        height, width = self.frames[camera].shape[:2]
+        return width, height
 
     def get_all_frames(self):
         return self.frames
@@ -123,6 +124,7 @@ def test_resume_maps_device_paths_after_source_order_changes(saved):
     path, manager, board, module = saved
     manager.camera_indices = [1, 0]
     manager.states.reverse()
+    manager.frames.reverse()
     session = restore_session(path, manager, board, module, read_observations(path))
     assert list(map(len, session.intrinsic_ids)) == [20, 20]
 

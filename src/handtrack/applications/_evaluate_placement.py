@@ -109,7 +109,11 @@ def _load_calibration(backend: str) -> dict:
     from mavis_track._files import load_npz
     data = load_npz(path)
     n = int(data["num_cameras"])
-    img_size = tuple(data["img_size"])
+    image_sizes = data.get("image_sizes")
+    if image_sizes is None:
+        image_sizes = np.tile(data["img_size"], (n, 1))
+    if image_sizes.shape != (n, 2) or np.any(image_sizes <= 0):
+        raise ValueError("Invalid calibration image sizes")
 
     cameras = []
     for i in range(n):
@@ -127,10 +131,10 @@ def _load_calibration(backend: str) -> dict:
                 "dist": dist,
                 "P": P,
                 "C": C,
-                "img_size": img_size,
+                "img_size": tuple(image_sizes[i]),
             }
         )
-    return {"cameras": cameras, "img_size": img_size, "n": n, "path": path}
+    return {"cameras": cameras, "n": n, "path": path}
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +350,9 @@ def _print_report(
     # --- Parameters ---
     print(f"\n  Calibration file : {calib['path']}")
     print(f"  Cameras          : {n_cams}")
-    print(f"  Image size       : {calib['img_size'][0]} x {calib['img_size'][1]} px")
+    resolutions = dict.fromkeys(f"{w}×{h}" for w, h in (cam["img_size"] for cam in calib["cameras"]))
+    resolution_summary = ", ".join(resolutions)
+    print(f"  Image sizes      : {resolution_summary} px")
     print(f"  Grid spacing     : {grid_spacing * unit_scale:.1f} {unit_label}")
     print(f"  Grid dimensions  : {grid_shape[0]} x {grid_shape[1]} x {grid_shape[2]}")
     print(
@@ -513,7 +519,7 @@ def _print_report(
     print(
         fmt.format(
             "Image resolution",
-            f"{calib['img_size'][0]}×{calib['img_size'][1]}",
+            resolution_summary,
             "16MP (Vero)",
         )
     )

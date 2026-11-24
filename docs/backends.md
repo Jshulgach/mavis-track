@@ -11,7 +11,8 @@ mavis-track calibrate --backend webcam
 mavis-track gui --backend webcam
 ```
 
-Use matching camera resolutions and a accurately printed ChArUco board.
+Set each camera to the video mode you intend to use for tracking and use an
+accurately printed ChArUco board. Webcam calibration supports mixed resolutions.
 The solver checks held-out reprojection errors, rejects failed candidates,
 preserves the prior calibration, and publishes a validated result atomically.
 Every fifth capture is reserved from all model fitting for a separate reconstructed

@@ -114,7 +114,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     translation_count = len([key for key in keys if key.startswith("T_")])
 
     _print_row("num_cameras", _format_scalar(num_cameras))
-    _print_row("img_size", _format_scalar(img_size))
+    if "image_sizes" in keys:
+        _print_row("image_sizes", _format_scalar(data["image_sizes"]))
+    else:
+        _print_row("img_size", _format_scalar(img_size))
     _print_row("captures", _format_scalar(num_captures))
     _print_row("camera_ids", _format_scalar(camera_ids))
     _print_row("board_size", _format_scalar(checkerboard_size))

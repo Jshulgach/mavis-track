@@ -42,9 +42,8 @@ def read_observations(path):
     count = int(data["num_cameras"])
     sizes = data["image_sizes"]
     if (count < 1 or count > len(data)//6 or sizes.shape != (count, 2)
-            or not np.isfinite(sizes).all() or np.any(sizes <= 0)
-            or not np.all(sizes == sizes[0])):
-        raise ValueError("Replay requires valid, matching camera resolutions")
+            or sizes.dtype.kind not in "iu" or np.any(sizes <= 0)):
+        raise ValueError("Replay requires a positive integer width and height for each camera")
     required = ("camera_ids", "board_points", "charuco_square_length",
                 "charuco_marker_length", "reserved_view_indices")
     if any(key not in data for key in required):

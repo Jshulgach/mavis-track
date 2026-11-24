@@ -41,7 +41,8 @@ class Manager:
         return self.states[i]["actual"]["width"], self.states[i]["actual"]["height"]
 
     def get_all_frames(self):
-        return [np.zeros((480, 640, 3), np.uint8) for _ in self.workers]
+        return [np.zeros((height, width, 3), np.uint8)
+                for width, height in map(self.get_resolution, range(len(self.workers)))]
 
     def save_settings(self):
         if any(state["pending"] for state in self.states):
@@ -89,8 +90,9 @@ def test_live_controls_lock_mode_and_lens_changes(app):
 
 
 @pytest.mark.parametrize("size", [(640, 360), (800, 600)])
-def test_setup_keeps_three_previews_visible_and_validates_resolution(app, size):
+def test_setup_keeps_mixed_resolution_previews_visible(app, size):
     manager = Manager()
+    manager.states[2]["actual"].update(width=320, height=240, fourcc="YUY2")
     dialog = WebcamSetupDialog(manager=manager)
     dialog.show()
     dialog.resize(*size)
@@ -101,10 +103,6 @@ def test_setup_keeps_three_previews_visible_and_validates_resolution(app, size):
         assert dialog.width() <= size[0] and dialog.height() <= size[1]
         assert all(label.pixmap() is not None for label in dialog.labels)
         assert dialog.grid.height() >= 120
-        manager.states[2]["actual"]["width"] = 1280
-        dialog.accept()
-        assert not manager.saved and "same actual resolution" in dialog.status.text()
-        manager.states[2]["actual"]["width"] = 640
         manager.states[0]["pending"] = True
         dialog.accept()
         assert not manager.saved and "pending" in dialog.status.text()
@@ -180,7 +178,7 @@ def wait_for(app, predicate):
 @pytest.fixture
 def selectable_dialog(app, monkeypatch):
     import handtrack.applications._webcam_qt as ui
-    import mavis_track._webcam_windows as windows
+    from unity_hand_tracking.webcam import multi_webcam
 
     class Streams(Manager):
         def __init__(self, indices):
@@ -210,7 +208,7 @@ def selectable_dialog(app, monkeypatch):
             self.states = []
 
     opened = []
-    def open_sources(old, indices, backend, carry):
+    def open_sources(old, indices, backend, carry, expected_paths=None, retry_bandwidth=False):
         if old:
             old.reconfigure(indices, settings=carry)
             manager = old
@@ -221,7 +219,7 @@ def selectable_dialog(app, monkeypatch):
 
     monkeypatch.setattr(ui, "load_profile", lambda: {
         "schema": 1, "backend": "dshow", "indices": [1, 2, 4], "cameras": {}})
-    monkeypatch.setattr(windows, "enumerate_devices", lambda: [
+    monkeypatch.setattr(multi_webcam, "enumerate_devices", lambda: [
         {"index": i, "device_path": f"usb-{i}", "name": f"USB {i}"} for i in (1, 2, 4)])
     monkeypatch.setattr(WebcamSetupDialog, "_open", staticmethod(open_sources))
     dialog = WebcamSetupDialog()
@@ -397,6 +395,7 @@ def test_first_calibration_handoff_needs_no_existing_archive(app, monkeypatch, t
     from handtrack.applications._calibration_preview import CalibrationControls
     from unity_hand_tracking.webcam.multi_webcam import CameraManager
     manager = Manager()
+    manager.states[2]["actual"].update(width=320, height=240, fourcc="YUY2")
     calls = []
     profile = tmp_path / "never-created" / "settings.json"
     monkeypatch.setenv("MAVIS_WEBCAM_PROFILE", str(profile))
@@ -459,3 +458,31 @@ def test_dashboard_groups_text_size_and_calibration_actions(app):
         setup._finish()
         preview.webcam_controls.timer.stop()
         preview.shutdown()
+
+
+def test_switching_capture_backend_maps_selected_physical_camera(app, monkeypatch):
+    import handtrack.applications._webcam_qt as ui
+    from unity_hand_tracking.webcam import multi_webcam
+
+    dshow = [{"index": 0, "name": "Integrated", "device_path": "usb-A"},
+             {"index": 1, "name": "External", "device_path": "usb-B"}]
+    msmf = [dict(dshow[1], index=0), dict(dshow[0], index=1)]
+    monkeypatch.setattr(multi_webcam, "camera_inventory",
+                        lambda backend: (backend, dshow if backend == "dshow" else msmf))
+    monkeypatch.setattr(ui, "load_profile", lambda: {
+        "backend": "dshow", "indices": [1], "identities": {"1": "usb-B"}, "cameras": {}})
+    monkeypatch.setattr(WebcamSetupDialog, "select_checked", lambda self: None)
+    dialog = WebcamSetupDialog()
+    try:
+        dialog.bind()
+        assert dialog._titles_by_source[1].text() == "Source 1: External"
+        dialog._carry["1"] = {"exposure": -5}
+        dialog.backend.setCurrentIndex(dialog.backend.findData("msmf"))
+        assert dialog._selected == [0]
+        assert dialog._titles_by_source[0].text() == "Source 0: External"
+        assert dialog._titles_by_source[1].text() == "Source 1: Integrated"
+        assert dialog._device_paths[0] == "usb-B"
+        assert dialog._carry == {}
+    finally:
+        dialog.reject()
+        wait_for(app, lambda: not dialog.timer.isActive())
