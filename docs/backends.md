@@ -246,5 +246,5 @@ Calibrated reconstruction remains separate from independent WiLoR camera models.
 ## Windows USB webcam setup
 
 See [USB webcams](webcams.md) for source selection, native driver controls,
-video modes, shared staged calibration and saved settings. The default webcam
-Studio previews one source; use the advanced webcam GUI for calibrated multi-camera hands.
+video modes, shared staged calibration and saved settings. The default advanced
+dashboard supports calibrated multi-camera hands. Studio previews one source.
