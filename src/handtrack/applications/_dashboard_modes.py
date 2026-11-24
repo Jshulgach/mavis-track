@@ -7,12 +7,11 @@ import cv2
 import numpy as np
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QImage, QPixmap
-from PyQt5.QtWidgets import QComboBox, QLabel, QSizePolicy
+from PyQt5.QtWidgets import QCheckBox, QGroupBox, QLabel, QSizePolicy, QVBoxLayout
 
 from ._region_inference import RegionInferenceWorker
 
-MODE_LABELS = (("Hands", "hands"), ("Body", "pose"), ("Face", "face"),
-               ("Hands + body + face", "holistic"))
+REGION_LABELS = (("hands", "Hands"), ("pose", "Body"), ("face", "Face"))
 
 
 class DashboardModes:
@@ -26,11 +25,17 @@ class DashboardModes:
         self._saved_3d = None
         self._last_packet = None
         self._cap_state = None
-        self.mode = QComboBox()
-        for title, value in MODE_LABELS:
-            self.mode.addItem(title, value)
-        self.mode.setCurrentIndex(max(0, self.mode.findData(getattr(owner, "tracking_mode", "hands"))))
-        self.mode.setToolTip("Select regions, then enable inference. Body/face outputs are per-camera overlays.")
+        self._scene_dirty = True
+        self.region_box = QGroupBox("MediaPipe regions")
+        region_layout = QVBoxLayout(self.region_box)
+        self.region_checks = {}
+        initial_mode = getattr(owner, "tracking_mode", "hands")
+        for region, title in REGION_LABELS:
+            checkbox = QCheckBox(title)
+            checkbox.setChecked(initial_mode in (region, "holistic"))
+            checkbox.toggled.connect(self.changed)
+            region_layout.addWidget(checkbox)
+            self.region_checks[region] = checkbox
         self.hint = QLabel()
         self.hint.setWordWrap(True)
         self.hint.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
@@ -38,12 +43,9 @@ class DashboardModes:
         self.details.setWordWrap(True)
         self.details.setTextFormat(Qt.PlainText)
         self.details.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        layout.addWidget(QLabel("Tracking mode"))
-        layout.addWidget(self.mode)
+        layout.addWidget(self.region_box)
         layout.addWidget(self.hint)
         layout.addWidget(self.details)
-        self.mode.currentIndexChanged.connect(self.changed)
-        owner.mode_combo = self.mode
         owner.model_combo.setToolTip(
             "Choose MediaPipe or WiLoR; loading happens in the background." if webcam else
             "Choose MediaPipe or WiLoR. Stop cameras before changing the OptiTrack engine.")
@@ -54,8 +56,26 @@ class DashboardModes:
         return self.owner.model_combo.currentData()
 
     @property
+    def regions(self):
+        if self.model == "wilor":
+            return ("hands",)
+        return tuple(region for region, checkbox in self.region_checks.items() if checkbox.isChecked())
+
+    @property
     def uses_regions(self):
-        return self.mode.currentData() != "hands" or (self.webcam and self.model == "wilor")
+        return self.regions != ("hands",) or (self.webcam and self.model == "wilor")
+
+    @property
+    def supports_rig(self):
+        return not (self.webcam and self.model == "wilor")
+
+    @property
+    def rig_available(self):
+        return self.supports_rig and bool(getattr(self.owner.tracker, "calibration_available", False))
+
+    @property
+    def enabled(self):
+        return self.owner.inference_checkbox.isChecked() and bool(self.regions)
 
     def manager(self):
         if hasattr(self.owner, "_capture_manager"):
@@ -64,28 +84,24 @@ class DashboardModes:
 
     def _sync_choices(self):
         wilor = self.model == "wilor"
-        if wilor:
-            self.mode.blockSignals(True)
-            self.mode.setCurrentIndex(0)
-            self.mode.blockSignals(False)
-        self.mode.setEnabled(not wilor)
+        self.region_box.setVisible(not wilor)
         self.details.setVisible(self.uses_regions)
-        self.owner.tracking_mode = self.mode.currentData()
         self.hint.setText(
             "WiLoR: per-camera hand mesh preview; webcam calibrated 3D uses MediaPipe hands."
             if wilor and self.webcam else
             "WiLoR supports hands only; calibrated fusion requires valid rig calibration."
             if wilor else
-            "Hands: calibrated 3D when available. Body, face and combined: per-camera overlays.")
+            "All selected regions can use calibrated 3D when visible in at least two cameras.")
 
     def changed(self, *_):
         if hasattr(self.owner, "_landmarks"):
-            self.owner._landmarks.reset("Tracking model/mode changed; waiting for observations")
+            self.owner._landmarks.reset("Tracking selection changed; waiting for observations")
         self._sync_choices()
         self.error = None
         self._last_packet = None
         self.details.clear()
         self.owner.reset_kalman_filters()
+        self.owner.update_3d_view([], [])
         if getattr(self.owner, "is_running", False):
             self.owner.broadcast_landmarks([], 0)
             self.owner.broadcast_joint_angles([])
@@ -93,7 +109,7 @@ class DashboardModes:
         self.capabilities()
 
     def capabilities(self):
-        state = (self.uses_regions, bool(getattr(self.owner.tracker, "calibration_available", False)))
+        state = (self.model, self.uses_regions, self.rig_available)
         if state == self._cap_state:
             return
         self._cap_state = state
@@ -104,12 +120,12 @@ class DashboardModes:
             return
         if self.webcam:
             checkbox.setToolTip(
-                "Rig 3D is paused in this per-camera mode. Choose MediaPipe Hands to use saved rig calibration."
-                if self.uses_regions else
-                "Show calibrated rig 3D; enable MediaPipe Hands inference to reconstruct landmarks."
-                if state[1] else
+                "Choose MediaPipe to use the webcam rig calibration."
+                if not self.supports_rig else
+                "Show calibrated rig 3D for the selected MediaPipe regions."
+                if self.rig_available else
                 "Rig 3D is disabled because calibration did not load; see the calibration notice above.")
-        if self.uses_regions:
+        if not self.supports_rig:
             if self._saved_3d is None:
                 self._saved_3d = checkbox.isChecked()
             if hasattr(self.owner, "_set_reconstruction_available"):
@@ -121,7 +137,7 @@ class DashboardModes:
                 control.setEnabled(False)
             self.owner.update_3d_view([], [])
         else:
-            available = bool(getattr(self.owner.tracker, "calibration_available", False))
+            available = self.rig_available
             if hasattr(self.owner, "_set_reconstruction_available"):
                 self.owner._set_reconstruction_available(available)
             else:
@@ -136,7 +152,7 @@ class DashboardModes:
         if self._stopping:
             return
         self._sync_choices()
-        enabled = self.owner.inference_checkbox.isChecked()
+        enabled = self.enabled
         thread = getattr(self.owner, "_proc_thread", None)
         if thread is not None:
             thread.set_inference_enabled(enabled and not self.uses_regions)
@@ -158,11 +174,11 @@ class DashboardModes:
                 return
             self.worker = None
         if self.worker is None or not self.worker.is_alive():
-            self.worker = RegionInferenceWorker(manager)
+            self.worker = RegionInferenceWorker(manager, tracker=self.owner.tracker)
             self.worker.start()
         options = dict(getattr(self.owner, "_wilor_options", {}))
         options.setdefault("confidence", self.owner.min_det_spin.value())
-        self.worker.configure(enabled=True, model=self.model, mode=self.mode.currentData(),
+        self.worker.configure(enabled=True, model=self.model, regions=self.regions,
                               detection=self.owner.min_det_spin.value(),
                               tracking=self.owner.min_track_spin.value(), wilor_options=options)
         self.capabilities()
@@ -213,7 +229,7 @@ class DashboardModes:
         if self._stopping:
             self._render_raw(self.manager())
             return True
-        enabled = self.owner.inference_checkbox.isChecked()
+        enabled = self.enabled
         if not self.uses_regions:
             if not self.webcam:
                 return False
@@ -242,7 +258,9 @@ class DashboardModes:
             self.owner.hands_label.setText("Inference off")
             self.owner.fps_label.setText("Inference: off")
             self._render_raw(manager)
-            self.owner.status_label.setText(self.error or "Cameras running · inference off")
+            status = ("Cameras running · select Hands, Body, or Face"
+                      if self.owner.inference_checkbox.isChecked() else "Cameras running · inference off")
+            self.owner.status_label.setText(self.error or status)
             return True
         packet, state, error = self.worker.snapshot() if self.worker is not None else (None, "Waiting for model", None)
         if error:
@@ -251,8 +269,12 @@ class DashboardModes:
             self._render_raw(manager)
             self.owner.status_label.setText(self.error)
             return True
-        self.owner.status_label.setText(state + " · per-camera overlays")
         if packet is None or time.perf_counter() - packet.finished_at > 1.:
+            self.owner.status_label.setText(state + " · per-camera overlays")
+            if self._last_packet is not None:
+                self._last_packet = None
+                self.owner.update_3d_view([], [])
+                self.owner.landmark_panel.invalidate("Waiting for fresh observations", clear_observations=True)
             self.owner.hands_label.setText("Waiting for results")
             self.owner.fps_label.setText("Inference: waiting")
             self._render_raw(manager)
@@ -270,14 +292,25 @@ class DashboardModes:
             else:
                 self._image(label, frame)
         counts = []
-        for source, result in zip(packet.sources, packet.results):
-            if result is not None:
-                counts.append(f"Camera {source}: {len(result.hands)} hands, "
-                              f"{len(getattr(result, 'poses', []))} body, "
-                              f"{len(getattr(result, 'faces', []))} face")
+        for source, view in zip(packet.sources, packet.results):
+            if not view:
+                continue
+            hands = sum(len(result.hands) for result in view.values())
+            body = sum(len(getattr(result, "poses", ())) for result in view.values())
+            face = sum(len(getattr(result, "faces", ())) for result in view.values())
+            counts.append(f"Camera {source}: {hands} hands, {body} body, {face} face")
         self.details.setText("\n".join(counts))
-        self.owner.hands_label.setText("2D per view")
+        rig_status = ("Calibrated 3D active" if packet.reconstructed else "Rig 3D waiting for matching views"
+                      if self.rig_available else "2D per camera")
+        self.owner.hands_label.setText(rig_status)
+        self.owner.status_label.setText(state + " · per-camera overlays · " + rig_status)
         self.owner.tracked_hand_label.setText("Per-camera counts")
+        if self.rig_available and self.owner.show_3d_view and self.owner.analysis_tabs.currentIndex() == 0:
+            if packet is not self._last_packet or self._scene_dirty:
+                self.owner.update_3d_view([], [], regions=packet.reconstructed)
+                self._scene_dirty = False
+        else:
+            self._scene_dirty = True
         if packet is not self._last_packet:
             self.owner._landmarks.regions(packet)
             if self._last_packet is not None:
@@ -291,5 +324,5 @@ class DashboardModes:
         self.owner.frame_label.setText(f"Batches: {self.owner.frame_count}")
         stamps = [stamp for stamp in packet.received_at if stamp is not None]
         age = time.perf_counter() - min(stamps) if stamps else 0.
-        self.owner.timing_label.setText(f"Inference frame age: {age*1000:.0f} ms · 2D per camera")
+        self.owner.timing_label.setText(f"Inference frame age: {age*1000:.0f} ms")
         return True

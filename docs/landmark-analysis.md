@@ -1,10 +1,11 @@
 # Live landmark analysis
 
 Both advanced camera dashboards include **Cameras** and **Landmark tracker** tabs.
-Start the selected cameras, choose an inference model/mode, enable inference, then
-open **Landmark tracker**. Switching tabs preserves capture and inference.
+Start the selected cameras, choose an inference model and regions, enable
+inference, then open **Landmark tracker**. Switching tabs preserves capture and
+inference.
 
-Choose a **Signal** (camera/region or calibrated hand), then a **Landmark**.
+Choose a **Signal** (per-camera or calibrated rig), then a **Landmark**.
 Hand joints and body landmarks have names; face landmarks use indexed entries
 with a few descriptive aliases. Type into the landmark box to search and select
 a matching entry. Only the selected landmark's history is retained.
@@ -18,7 +19,8 @@ Neither action starts recording or changes camera capture.
 
 | Signal | Position | Velocity / acceleration | Meaning |
 | --- | --- | --- | --- |
-| Calibrated MediaPipe hand | m | m/s, m/s² | Existing filtered hand estimate in camera-0 rig coordinates; requires usable calibration and accepted reconstruction for the selected point |
+| Calibrated MediaPipe hand | m | m/s, m/s² | Accepted landmark in camera-0 rig coordinates. Hands alone can use the existing hand filters. |
+| Calibrated MediaPipe body or face | m | m/s, m/s² | Landmark triangulated in camera-0 rig coordinates from at least two calibrated views. The camera observations must agree within the reprojection threshold. |
 | Calibrated WiLoR hand | m | m/s, m/s² | Model mesh joints fitted into the calibrated rig; points without accepted triangulation are excluded |
 | Camera hand/body/face | px | px/s, px/s² | Full-source image coordinates: x right, y down; excludes uncalibrated model depth |
 | WiLoR Model 3D | m | m/s, m/s² | Model-estimated wrist-relative camera axes; wrist translation is absent, so wrist motion is zero in this space |

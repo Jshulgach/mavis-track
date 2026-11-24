@@ -745,9 +745,9 @@ class StereoHandTrackerGUI(QMainWindow):
             text = "Cameras stopped; saved calibration will be checked at next start."
             color = "#aaa"
         elif getattr(self.tracker, "calibration_available", False):
-            text = ("Calibration loaded · current mode is per-camera; rig 3D is paused."
-                    if self._dashboard_modes.uses_regions else
-                    "Calibration loaded · rig 3D available with MediaPipe Hands inference.")
+            text = ("Calibration loaded · rig 3D available for selected MediaPipe regions."
+                    if self._dashboard_modes.supports_rig else
+                    "Calibration loaded · select MediaPipe for webcam rig 3D.")
             color = "#7edb9b"
         else:
             reason = getattr(self.tracker, "calibration_error", None) or getattr(
@@ -1550,7 +1550,7 @@ class StereoHandTrackerGUI(QMainWindow):
     # ------------------------------------------------------------------ #
     # 3D Visualization
     # ------------------------------------------------------------------ #
-    def update_3d_view(self, raw_hands, filtered_hands):
+    def update_3d_view(self, raw_hands, filtered_hands, *, regions=None):
         """Render 3D visualization (Top, Front, Side, Isometric views)."""
         w, h = 600, 600
         canvas = np.full((h, w, 3), 40, dtype=np.uint8)
@@ -1631,6 +1631,14 @@ class StereoHandTrackerGUI(QMainWindow):
                 (200, 200, 200),
                 1,
             )
+
+        if regions is not None:
+            from handtrack.applications._region_geometry import draw_calibrated_regions
+
+            draw_calibrated_regions(canvas, view_rects, regions)
+            if not regions:
+                cv2.putText(canvas, "Waiting for matching camera views", (20, h - 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, .5, (160, 160, 160), 1)
 
         # Isometric projection angles (30° standard isometric)
         iso_angle = np.radians(30)
