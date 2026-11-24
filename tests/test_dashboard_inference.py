@@ -59,9 +59,11 @@ def models(monkeypatch):
         def process(self, rgb):
             pose = (SimpleNamespace(landmark=[SimpleNamespace(x=.25, y=.5, visibility=1.)])
                     if self.mode in ("pose", "holistic") else None)
+            faces = ([SimpleNamespace(landmark=[SimpleNamespace(x=.3, y=.4)])]
+                     if self.mode == "face" else [])
             return SimpleNamespace(hands=[], poses=[self.mode] if pose is not None else [],
-                                   faces=[self.mode] if self.mode in ("face", "holistic") else [],
-                                   raw=SimpleNamespace(pose_landmarks=pose))
+                                   faces=faces, raw=SimpleNamespace(
+                                       pose_landmarks=pose, multi_face_landmarks=faces))
 
         def draw(self, frame, result):
             frame[0, 0] = (0, 255, 0)
@@ -81,7 +83,7 @@ def test_disabled_worker_never_loads_models_or_owns_capture(models):
         time.sleep(.05)
         assert not models.created
         assert worker.snapshot() == (None, "Inference off", None)
-        worker.configure(enabled=True, mode="pose")
+        worker.configure(enabled=True, regions=("pose",))
         wait_for(lambda: worker.snapshot()[0] is not None)
         packet = worker.snapshot()[0]
         assert packet.sources == (2, 7)
@@ -102,15 +104,15 @@ def test_disabled_worker_never_loads_models_or_owns_capture(models):
 def test_switch_during_load_discards_old_mode_and_shutdown_is_nonblocking(models):
     models.gate = threading.Event()
     worker = inference.RegionInferenceWorker(Manager())
-    worker.configure(enabled=True, mode="pose")
+    worker.configure(enabled=True, regions=("pose",))
     worker.start()
     try:
         wait_for(models.entered.is_set)
-        worker.configure(enabled=True, mode="face")
+        worker.configure(enabled=True, regions=("face",))
         assert worker.snapshot()[0] is None
         models.gate.set()
         wait_for(lambda: worker.snapshot()[0] is not None)
-        assert worker.snapshot()[0].mode == "face"
+        assert worker.snapshot()[0].regions == ("face",)
         assert all(model.closed for model in models.created if model.mode == "pose")
         worker.configure(enabled=False)
         assert worker.snapshot()[0] is None
@@ -125,16 +127,16 @@ def test_load_failure_keeps_capture_and_can_be_retried(models):
     models.fail = True
     manager = Manager()
     worker = inference.RegionInferenceWorker(manager)
-    worker.configure(enabled=True, mode="holistic")
+    worker.configure(enabled=True, regions=("hands", "pose", "face"))
     worker.start()
     try:
         wait_for(lambda: worker.snapshot()[2])
         assert "test-model" in worker.snapshot()[2]
         assert worker.is_alive() and not manager.stopped
         models.fail = False
-        worker.configure(enabled=True, mode="holistic")
+        worker.configure(enabled=True, regions=("hands", "pose", "face"))
         wait_for(lambda: worker.snapshot()[0] is not None)
-        assert worker.snapshot()[0].results[0].poses == ["holistic"]
+        assert worker.snapshot()[0].results[0]["pose"].poses == ["pose"]
     finally:
         worker.request_stop()
         worker.join(6)
@@ -162,7 +164,7 @@ def test_wilor_uses_one_runtime_for_multiple_views(monkeypatch):
     monkeypatch.setattr(preview, "draw_wilor", lambda *args, **kwargs: None)
     worker = inference.RegionInferenceWorker(Manager())
     with pytest.raises(ValueError, match="hands only"):
-        worker.configure(enabled=True, model="wilor", mode="face")
+        worker.configure(enabled=True, model="wilor", regions=("face",))
     worker.configure(enabled=True, model="wilor", wilor_options={"device": "cuda", "batch_size": 2})
     worker.start()
     try:
@@ -194,8 +196,11 @@ def test_dashboard_live_mode_switch_and_error_recovery(backend, app, models, mon
     window.is_running = True
     try:
         assert not window.inference_checkbox.isChecked()
-        assert [window.mode_combo.itemData(i) for i in range(4)] == ["hands", "pose", "face", "holistic"]
-        window.mode_combo.setCurrentIndex(1)
+        checks = controller.region_checks
+        assert [check.text() for check in checks.values()] == ["Hands", "Body", "Face"]
+        assert controller.regions == ("hands",)
+        checks["pose"].setChecked(True)
+        checks["hands"].setChecked(False)
         assert not window.show_3d_checkbox.isEnabled()
         assert controller.worker is None  # Choosing a mode does not enable it.
         models.gate = threading.Event()
@@ -235,15 +240,27 @@ def test_dashboard_live_mode_switch_and_error_recovery(backend, app, models, mon
             window.update_frame()
             assert window.inference_checkbox.isChecked()
             window._proc_thread = None
-        for mode in (2, 3, 1):
-            window.mode_combo.setCurrentIndex(mode)
-            assert controller.worker.snapshot()[0] is None
-            wait_for(lambda: controller.worker.snapshot()[0] is not None, app)
+        pose_models = [model for model in models.created if model.mode == "pose"]
+        for wanted in (("pose", "face"), ("hands", "pose", "face"), ("hands", "pose"),
+                       ("hands", "face"), ("face",), ("pose",)):
+            for region, check in checks.items():
+                check.setChecked(region in wanted)
+            def selected_packet():
+                packet = controller.worker.snapshot()[0]
+                return packet is not None and packet.regions == wanted
+
+            wait_for(selected_packet, app)
             controller.tick()
-            assert controller.worker.snapshot()[0].mode == window.mode_combo.currentData()
+            packet = controller.worker.snapshot()[0]
+            assert all(tuple(view) == wanted for view in packet.results)
+            if wanted == ("pose", "face"):
+                assert pose_models and all(not model.closed for model in pose_models)
+                assert [model for model in models.created if model.mode == "pose"] == pose_models
+                assert ("mediapipe", 7, "body") in panel.observations
+                assert ("mediapipe", 7, "face", 0) in panel.observations
             assert window.tracker.cam_mgr is manager and not manager.stopped
         models.fail = True
-        window.mode_combo.setCurrentIndex(2)
+        checks["face"].setChecked(True)
         wait_for(lambda: controller.worker.snapshot()[2], app)
         controller.tick()
         assert not window.inference_checkbox.isChecked()
@@ -252,15 +269,22 @@ def test_dashboard_live_mode_switch_and_error_recovery(backend, app, models, mon
         models.fail = False
         window.inference_checkbox.setChecked(True)
         wait_for(lambda: controller.worker.snapshot()[0] is not None, app)
-        window.inference_checkbox.setChecked(False)
+        for check in checks.values():
+            check.setChecked(False)
+        controller.tick()
+        assert window.inference_checkbox.isChecked() and not controller.enabled
         assert controller.worker.snapshot()[0] is None
-        window.mode_combo.setCurrentIndex(0)
+        assert "select Hands, Body, or Face" in window.status_label.text()
+        assert all(label.pixmap() is not None for label in window.video_labels)
+        window.inference_checkbox.setChecked(False)
+        checks["hands"].setChecked(True)
         assert window.show_3d_checkbox.isEnabled()
         assert not manager.stopped
         controller.stop()
         previous = controller.worker
         previous.join(6)
-        window.mode_combo.setCurrentIndex(1)
+        checks["pose"].setChecked(True)
+        checks["hands"].setChecked(False)
         window.inference_checkbox.setChecked(True)
         controller.tick()
         assert controller.worker is previous and not previous.is_alive()
@@ -316,13 +340,16 @@ def test_three_camera_dashboard_fits_small_screens_and_text_zoom(backend, size, 
             QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
             app.processEvents()
         assert window.width() == size[0] and window.height() == size[1]
-        assert window.mode_combo.font().pointSizeF() == pytest.approx(window._control_font.pointSizeF()*zoom/100)
+        checks = window._dashboard_modes.region_checks
+        assert window._dashboard_modes.regions == ("hands", "pose", "face")
+        assert all(check.font().pointSizeF() == pytest.approx(window._control_font.pointSizeF()*zoom/100)
+                   for check in checks.values())
         assert all(label.width() >= 45 and label.height() >= 45 for label in window.video_labels)
         for label in window.video_labels:
             top_left = label.mapTo(grid, QPoint(0, 0))
             assert grid.rect().contains(top_left)
             assert grid.rect().contains(top_left + QPoint(label.width()-1, label.height()-1))
-        for control in (window.mode_combo, window.inference_checkbox, window.text_size_spin,
+        for control in (*checks.values(), window.inference_checkbox, window.text_size_spin,
                         window.camera_view_combo, window.kalman_save_btn):
             scroll.ensureWidgetVisible(control)
             app.processEvents()
@@ -387,12 +414,12 @@ def test_webcam_calibration_notice_survives_inference_off_and_explains_2d_mode(a
         assert 'Calibration loaded' in window.calibration_label.text()
         assert 'saved-rig.npz' in window.calibration_label.toolTip()
         assert window.show_3d_checkbox.isEnabled()
-        window.mode_combo.setCurrentIndex(1)
+        window._dashboard_modes.region_checks["pose"].setChecked(True)
         assert 'Calibration loaded' in window.calibration_label.text()
         assert 'rig 3D is paused' in window.calibration_label.text()
         assert not window.show_3d_checkbox.isEnabled()
         assert 'MediaPipe Hands' in window.show_3d_checkbox.toolTip()
-        window.mode_combo.setCurrentIndex(0)
+        window._dashboard_modes.region_checks["pose"].setChecked(False)
         window.tracker.calibration_available = False
         window.tracker.calibration_error = 'focus expected 9, got 12; restore saved setting'
         window._dashboard_modes._cap_state = None

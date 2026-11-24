@@ -26,22 +26,21 @@ for compatibility. Use `mavis-track COMMAND --help` for all options.
 `mavis-track gui` defaults to the advanced dashboard for either camera
 backend. `--advanced-hands` remains accepted for compatibility. Webcam source selection
 uses the dashboard's **Choose cameras** controls. Use `--studio` or `demo`
-explicitly for a video source. Both dashboards offer **Model**, **Tracking mode**
-and **Enable inference**. MediaPipe supports Hands, Body, Face and Hands + body + face;
-WiLoR supports hands only. Body/combined inference follows one person per view,
-and face mode follows one face per view. Inference starts off, so cameras can be tested without
-loading a model. Mode selection and inference toggles keep camera streams open;
-model loading and inference run in background workers. OptiTrack engine changes
-use Stop Cameras, select model, then Start Cameras.
+explicitly for a video source. Both dashboards offer **Model** and **Enable
+inference**. With MediaPipe, check any combination of **Hands**, **Body**, and
+**Face**. Body and face track one person and one face per view, respectively.
+WiLoR supports hands only. Dashboard inference starts off. Clearing every
+MediaPipe checkbox also pauses inference and keeps camera streams open. Model
+loading and inference run in background workers. For OptiTrack engine changes,
+use Stop Cameras, select the model, then Start Cameras.
 
-Body, face and combined dashboard results are per-camera overlays; calibrated
-reconstruction, hand angles and hand streams are paused in these modes. They do
-not export numeric body/face recordings. Use the separate `record --mode hand-body`
+Dashboard selections that include Body or Face show per-camera overlays and
+pause calibrated reconstruction, hand angles, and hand streams. Use the separate `record --mode hand-body`
 workflow for combined numeric recording.
 
 ```bash
 mavis-track gui --backend webcam
-mavis-track gui --backend webcam --mode holistic
+mavis-track gui --backend webcam --mode holistic  # Preselect all three MediaPipe regions
 mavis-track gui --backend optitrack --mode pose
 mavis-track gui --studio --backend webcam --source clip.mp4 --mode pose
 mavis-track demo --source 0 --mode hands

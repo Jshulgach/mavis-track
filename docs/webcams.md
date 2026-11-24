@@ -165,14 +165,15 @@ disabled without usable calibration; they do not start or stop USB streams.
 Stop first to change video mode, focus or zoom. Without usable calibration, camera video and per-camera 2D
 tracking remain available and calibrated 3D is disabled.
 
-**Model** selects MediaPipe or optional WiLoR. **Tracking mode** selects Hands,
-Body, Face or Hands + body + face for MediaPipe; WiLoR supports hands only.
-Start cameras and check **Enable inference** when ready. You can switch modes,
-switch the webcam model, or turn inference off while capture stays open.
-Loading/errors keep the raw feeds live. Body/face/combined modes show per-camera
-overlays and disable calibrated 3D and hand angle/landmark output. Webcam WiLoR
-also provides per-camera mesh/joint previews; MediaPipe Hands retains calibrated
-3D. WiLoR needs its [separate environment and assets](wilor.md).
+**Model** selects MediaPipe or optional WiLoR. For MediaPipe, select any
+combination of **Hands**, **Body**, and **Face**. Start cameras and check
+**Enable inference** when ready. Changing the selected regions or disabling
+inference keeps the cameras running, as does clearing all three checkboxes.
+Raw feeds stay visible during model loading and errors. MediaPipe Hands alone
+supports calibrated 3D. Selections that include Body or Face show per-camera
+overlays and pause calibrated 3D and hand angle/landmark output. Webcam WiLoR
+provides per-camera hand mesh and joint previews. WiLoR needs its
+[separate environment and assets](wilor.md).
 
 `mavis-track gui --studio --backend webcam` explicitly opens the single-camera Studio. Its **USB camera
 setup** button stops the current stream before opening setup, then resumes the first

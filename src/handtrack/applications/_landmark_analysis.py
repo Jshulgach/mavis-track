@@ -357,10 +357,14 @@ class LandmarkDashboard:
 
     def regions(self, packet):
         if packet.model == "wilor":
-            observations = wilor_views(packet.results, packet.sources, packet.received_at)
+            observations = wilor_views([view.get("hands") for view in packet.results],
+                                       packet.sources, packet.received_at)
         else:
-            observations = mediapipe_views(packet.frames, packet.results, packet.sources, packet.received_at,
-                                          mode=packet.mode)
+            observations = []
+            for region in packet.regions:
+                observations.extend(mediapipe_views(
+                    packet.frames, [view.get(region) for view in packet.results],
+                    packet.sources, packet.received_at, mode=region))
         self.panel.observe(observations)
 
     def wilor(self, packet, sources, hands):
