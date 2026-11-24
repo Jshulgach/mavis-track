@@ -4,6 +4,8 @@ import time
 
 import numpy as np
 
+MAX_RECEIPT_SKEW = 0.05
+
 
 class FrameBuffer:
     """Workers publish immutable frames with host receipt timestamps.
@@ -35,12 +37,12 @@ class FrameBuffer:
             return (self.latest_frame if fresh else None, timestamp)
 
 
-def snapshots(workers, max_skew=0.05):
+def snapshots(workers, max_skew=MAX_RECEIPT_SKEW):
     """Drop expired frames and cameras outside a receipt-time skew window."""
     return snapshot_batch(workers, max_skew=max_skew)[0]
 
 
-def snapshot_batch(workers, max_skew=0.05):
+def snapshot_batch(workers, max_skew=MAX_RECEIPT_SKEW):
     """Return matching frames and host receipt times after freshness/skew checks."""
     values = [worker.get_snapshot() for worker in workers]
     latest = max((stamp for frame, stamp in values if frame is not None), default=None)

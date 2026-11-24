@@ -169,10 +169,12 @@ tracking remain available and calibrated 3D is disabled.
 combination of **Hands**, **Body**, and **Face**. Start cameras and check
 **Enable inference** when ready. Changing the selected regions or disabling
 inference keeps the cameras running, as does clearing all three checkboxes.
-Raw feeds stay visible during model loading and errors. MediaPipe Hands alone
-supports calibrated 3D. Selections that include Body or Face show per-camera
-overlays and pause calibrated 3D and hand angle/landmark output. Webcam WiLoR
-provides per-camera hand mesh and joint previews. WiLoR needs its
+Raw feeds stay visible during model loading and errors. **Show 3D View**
+displays all selected MediaPipe regions together when at least two enabled
+cameras with matching calibration provide agreeing views. Keep one subject in
+view for Body and Face. Use Hands alone for the existing hand angles and
+landmark streams. Webcam WiLoR provides per-camera hand mesh and joint previews.
+WiLoR needs its
 [separate environment and assets](wilor.md).
 
 `mavis-track gui --studio --backend webcam` explicitly opens the single-camera Studio. Its **USB camera

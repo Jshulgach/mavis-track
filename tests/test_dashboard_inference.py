@@ -4,10 +4,13 @@ import threading
 import time
 from types import SimpleNamespace
 
+import cv2
 import numpy as np
 import pytest
 
 from handtrack.applications import _region_inference as inference
+from handtrack.applications._landmark_sources import LandmarkObservation
+from handtrack.applications._region_geometry import reconstruct_regions
 
 
 def wait_for(predicate, app=None, timeout=6):
@@ -41,9 +44,51 @@ class Manager:
         self.stopped = True
 
 
+def camera_rig(sources, matrices, offsets, distortion=None):
+    if distortion is None:
+        distortion = [np.zeros(5) for _ in sources]
+    rotations = [np.eye(3) for _ in sources]
+    translations = [np.array([x, 0., 0.]) for x in offsets]
+    projections = [k @ np.column_stack((r, t)) for k, r, t in zip(matrices, rotations, translations)]
+    return SimpleNamespace(calibration_available=True, camera_ids=sources, _enabled_cameras=None,
+                           camera_matrices=matrices, dist_coeffs=distortion, R_matrices=rotations,
+                           projection_matrices=projections, max_reprojection_error=2.)
+
+
+def test_region_reconstruction_rejects_weak_matches_and_uses_physical_source_ids():
+    sources = (2, 7, 4)
+    matrices = [np.array([[f, 0., w / 2], [0., f, h / 2], [0., 0., 1.]])
+                for f, w, h in [(600., 640, 480), (900., 1280, 720), (450., 800, 600)]]
+    offsets = (0., -.2, -.35)
+    distortion = [np.array([.08, -.05, .001, .002, 0.])] * 3
+    rig = camera_rig(sources, matrices, offsets, distortion)
+    expected = np.array([[.07, -.11, 1.3], [.05, .04, 1.6], [-.1, .02, -1.], [.03, .03, 30.]])
+    observations = []
+    for source, k, offset in zip(sources, matrices, offsets):
+        xy, _ = cv2.projectPoints(expected, np.zeros(3), np.array([offset, 0., 0.]), k, distortion[0])
+        xy = xy.reshape(-1, 2)
+        if source == 4:
+            xy[0] += [90., 90.]
+        mask = np.array([True, source == 2, True, True])
+        key = ("mediapipe", source, "body")
+        observations.append(LandmarkObservation(key, "Body", "body", "Image", "px", 1., xy, mask, key))
+
+    reconstructed = reconstruct_regions(observations[::-1], sources, (1., 1.01, 1.02), rig)
+    assert len(reconstructed) == 1
+    body = reconstructed[0]
+    np.testing.assert_array_equal(body.valid, [True, False, False, False])
+    np.testing.assert_allclose(body.points[0], expected[0], atol=1e-6)
+    assert np.isnan(body.points[1:]).all()
+    rig._enabled_cameras = {1}
+    assert reconstruct_regions(observations, sources, (1., 1.01, 1.02), rig) == ()
+    rig._enabled_cameras = None
+    assert reconstruct_regions(observations, sources, (1., 1.06, 1.12), rig) == ()
+
+
 @pytest.fixture
 def models(monkeypatch):
-    state = SimpleNamespace(created=[], entered=threading.Event(), gate=None, fail=False)
+    state = SimpleNamespace(created=[], entered=threading.Event(), gate=None, fail=False,
+                            project_points=None)
 
     class Model:
         def __init__(self, mode, *args):
@@ -57,6 +102,15 @@ def models(monkeypatch):
             state.created.append(self)
 
         def process(self, rgb):
+            if state.project_points is not None:
+                points = state.project_points(self.mode, int(rgb[0, 0, 0]))
+                pose = points if self.mode == "pose" else None
+                hands = [points] if self.mode == "hands" else []
+                faces = [points] if self.mode == "face" else []
+                handedness = [SimpleNamespace(classification=[SimpleNamespace(label="Right")])]
+                return SimpleNamespace(hands=hands, poses=[pose] if pose else [], faces=faces,
+                                       raw=SimpleNamespace(pose_landmarks=pose, multi_hand_landmarks=hands,
+                                                           multi_handedness=handedness, multi_face_landmarks=faces))
             pose = (SimpleNamespace(landmark=[SimpleNamespace(x=.25, y=.5, visibility=1.)])
                     if self.mode in ("pose", "holistic") else None)
             faces = ([SimpleNamespace(landmark=[SimpleNamespace(x=.3, y=.4)])]
@@ -191,7 +245,20 @@ def test_dashboard_live_mode_switch_and_error_recovery(backend, app, models, mon
     window = cls()
     controller = window._dashboard_modes
     manager = Manager()
-    window.tracker = SimpleNamespace(cam_mgr=manager, calibration_available=True)
+    matrix = np.array([[50., 0., 32.], [0., 50., 24.], [0., 0., 1.]])
+    window.tracker = camera_rig(manager.camera_indices, [matrix, matrix], (0., -.1))
+    window.tracker.cam_mgr = manager
+
+    def project_points(mode, source):
+        # The body point projects to (16, 24) in camera 7.
+        origin = {"pose": [-.22, 0., 1.], "hands": [-.36, .1, 1.], "face": [-.18, -.2, 1.]}[mode]
+        world = np.array([origin]) + [[0., 0., 0.], [.03, .02, .01]]
+        x = 0. if source == 2 else -.1
+        pixels, _ = cv2.projectPoints(world, np.zeros(3), np.array([x, 0., 0.]), matrix, np.zeros(5))
+        xy = pixels.reshape(-1, 2) / [64., 48.]
+        return SimpleNamespace(landmark=[SimpleNamespace(x=u, y=v, visibility=1.) for u, v in xy])
+
+    models.project_points = project_points
     window.video_labels = [ImagePreview(), ImagePreview()]
     window.is_running = True
     try:
@@ -201,7 +268,8 @@ def test_dashboard_live_mode_switch_and_error_recovery(backend, app, models, mon
         assert controller.regions == ("hands",)
         checks["pose"].setChecked(True)
         checks["hands"].setChecked(False)
-        assert not window.show_3d_checkbox.isEnabled()
+        assert window.show_3d_checkbox.isEnabled()
+        window.show_3d_checkbox.setChecked(True)
         assert controller.worker is None  # Choosing a mode does not enable it.
         models.gate = threading.Event()
         window.inference_checkbox.setChecked(True)
@@ -245,7 +313,7 @@ def test_dashboard_live_mode_switch_and_error_recovery(backend, app, models, mon
                        ("hands", "face"), ("face",), ("pose",)):
             for region, check in checks.items():
                 check.setChecked(region in wanted)
-            def selected_packet():
+            def selected_packet(wanted=wanted):
                 packet = controller.worker.snapshot()[0]
                 return packet is not None and packet.regions == wanted
 
@@ -253,6 +321,16 @@ def test_dashboard_live_mode_switch_and_error_recovery(backend, app, models, mon
             controller.tick()
             packet = controller.worker.snapshot()[0]
             assert all(tuple(view) == wanted for view in packet.results)
+            expected_regions = {"pose": "body", "hands": "hand", "face": "face"}
+            assert {item.region for item in packet.reconstructed} == {expected_regions[region] for region in wanted}
+            assert window.show_3d_checkbox.isChecked()
+            assert "Calibrated 3D active" in window.status_label.text()
+            if wanted == ("hands", "pose", "face"):
+                assert not window.vis_3d_label.pixmap().isNull()
+                np.testing.assert_allclose(panel.observations[("mediapipe", "rig", "body")].points[0],
+                                           [-.22, 0., 1.], atol=1e-6)
+                assert panel.observations[("mediapipe", "rig", "face")].units == "m"
+                assert panel.observations[("mediapipe", "rig", "Left")].units == "m"
             if wanted == ("pose", "face"):
                 assert pose_models and all(not model.closed for model in pose_models)
                 assert [model for model in models.created if model.mode == "pose"] == pose_models
@@ -416,9 +494,9 @@ def test_webcam_calibration_notice_survives_inference_off_and_explains_2d_mode(a
         assert window.show_3d_checkbox.isEnabled()
         window._dashboard_modes.region_checks["pose"].setChecked(True)
         assert 'Calibration loaded' in window.calibration_label.text()
-        assert 'rig 3D is paused' in window.calibration_label.text()
-        assert not window.show_3d_checkbox.isEnabled()
-        assert 'MediaPipe Hands' in window.show_3d_checkbox.toolTip()
+        assert 'rig 3D available' in window.calibration_label.text()
+        assert window.show_3d_checkbox.isEnabled()
+        assert 'selected MediaPipe regions' in window.show_3d_checkbox.toolTip()
         window._dashboard_modes.region_checks["pose"].setChecked(False)
         window.tracker.calibration_available = False
         window.tracker.calibration_error = 'focus expected 9, got 12; restore saved setting'

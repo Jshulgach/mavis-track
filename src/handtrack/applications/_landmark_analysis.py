@@ -360,11 +360,7 @@ class LandmarkDashboard:
             observations = wilor_views([view.get("hands") for view in packet.results],
                                        packet.sources, packet.received_at)
         else:
-            observations = []
-            for region in packet.regions:
-                observations.extend(mediapipe_views(
-                    packet.frames, [view.get(region) for view in packet.results],
-                    packet.sources, packet.received_at, mode=region))
+            observations = (*packet.reconstructed, *packet.observations)
         self.panel.observe(observations)
 
     def wilor(self, packet, sources, hands):

@@ -34,9 +34,11 @@ MediaPipe checkbox also pauses inference and keeps camera streams open. Model
 loading and inference run in background workers. For OptiTrack engine changes,
 use Stop Cameras, select the model, then Start Cameras.
 
-Dashboard selections that include Body or Face show per-camera overlays and
-pause calibrated reconstruction, hand angles, and hand streams. Use the separate `record --mode hand-body`
-workflow for combined numeric recording.
+All selected MediaPipe regions show per-camera overlays. With matching rig
+calibration and clear views from two or more cameras, they also appear together
+in **Show 3D View** and as rig signals in **Landmark tracker**. Use Hands alone
+for the existing hand angle outputs and hand streams. Use the separate
+`record --mode hand-body` workflow for combined numeric recording.
 
 ```bash
 mavis-track gui --backend webcam

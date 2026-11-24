@@ -406,7 +406,8 @@ class StereoHandTrackerGUI(QMainWindow):
 
     def _set_reconstruction_available(self, available):
         """Keep preview controls active while gating features that require 3D."""
-        measured_skeleton = available and self.inference_model != 'wilor'
+        measured_skeleton = (available and self.inference_model != 'wilor'
+                             and not self._dashboard_modes.uses_regions)
         self.show_3d_checkbox.setEnabled(available)
         self.views_3d_group.setEnabled(available)
         self.occlusion_spin.setEnabled(available)
@@ -2291,7 +2292,7 @@ class StereoHandTrackerGUI(QMainWindow):
     # ------------------------------------------------------------------ #
     # 3D Visualization
     # ------------------------------------------------------------------ #
-    def update_3d_view(self, raw_hands, filtered_hands, meshes=None, faces=None):
+    def update_3d_view(self, raw_hands, filtered_hands, meshes=None, faces=None, *, regions=None):
         """Render 3D visualization (Top, Front, Side, Isometric views)."""
         w, h = 600, 600
         canvas = np.full((h, w, 3), 40, dtype=np.uint8)
@@ -2321,7 +2322,10 @@ class StereoHandTrackerGUI(QMainWindow):
         if self.show_3d_iso:
             active_views.append("iso")
         if self.show_3d_palm:
-            active_views.append("palm")
+            if regions is None:
+                active_views.append("palm")
+            elif not active_views:
+                active_views.append("iso")
 
         if not active_views:
             # Nothing enabled — show placeholder
@@ -2377,6 +2381,14 @@ class StereoHandTrackerGUI(QMainWindow):
                 (200, 200, 200),
                 1,
             )
+
+        if regions is not None:
+            from handtrack.applications._region_geometry import draw_calibrated_regions
+
+            draw_calibrated_regions(canvas, view_rects, regions)
+            if not regions:
+                cv2.putText(canvas, "Waiting for matching camera views", (20, h - 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, .5, (160, 160, 160), 1)
 
         # Isometric projection angles (30° standard isometric)
         iso_angle = np.radians(30)

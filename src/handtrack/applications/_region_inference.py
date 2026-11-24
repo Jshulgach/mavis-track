@@ -10,6 +10,9 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from ._landmark_sources import LandmarkObservation, mediapipe_views
+from ._region_geometry import reconstruct_regions
+
 
 @dataclass(frozen=True)
 class RegionPacket:
@@ -23,6 +26,8 @@ class RegionPacket:
     revision: int
     model: str
     regions: tuple[str, ...]
+    observations: tuple[LandmarkObservation, ...] = ()
+    reconstructed: tuple[LandmarkObservation, ...] = ()
 
 
 def create_mediapipe(mode, detection, tracking):
@@ -39,9 +44,10 @@ def create_wilor(options, progress):
 class RegionInferenceWorker(threading.Thread):
     """Own models, processing and overlay drawing; never open/stop cameras."""
 
-    def __init__(self, manager):
+    def __init__(self, manager, *, tracker=None):
         super().__init__(daemon=True, name="dashboard-region-inference")
         self.manager = manager
+        self.tracker = tracker
         self._lock = threading.RLock()
         self._stop_requested = threading.Event()
         self._revision = 0
@@ -184,6 +190,8 @@ class RegionInferenceWorker(threading.Thread):
                     # Own the images independently of native capture or its shutdown.
                     frames = tuple(frame.copy() if frame is not None else None for frame, _ in snapshots)
                     self._state(revision, f"Running {model} {region_names}")
+                    observations = []
+                    reconstructed = ()
                     if model == "wilor":
                         from ._wilor_preview import draw_wilor
                         results, annotated, overlays = [], [], []
@@ -205,8 +213,14 @@ class RegionInferenceWorker(threading.Thread):
                         results = tuple(view[0] for view in views)
                         annotated = tuple(view[1] for view in views)
                         overlays = tuple(view[2] for view in views)
+                        for region in regions:
+                            observations.extend(mediapipe_views(
+                                frames, [view.get(region) for view in results],
+                                sources, stamps, mode=region, flip=True))
+                        reconstructed = reconstruct_regions(observations, sources, stamps, self.tracker)
                     packet = RegionPacket(sources, frames, tuple(annotated), tuple(overlays),
-                                          tuple(results), stamps, time.perf_counter(), revision, model, regions)
+                                          tuple(results), stamps, time.perf_counter(), revision, model,
+                                          regions, tuple(observations), reconstructed)
                     with self._lock:
                         if revision == self._revision and self._enabled and not self._stop_requested.is_set():
                             self._packet = packet

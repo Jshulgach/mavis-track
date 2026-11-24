@@ -25,6 +25,7 @@ class DashboardModes:
         self._saved_3d = None
         self._last_packet = None
         self._cap_state = None
+        self._scene_dirty = True
         self.region_box = QGroupBox("MediaPipe regions")
         region_layout = QVBoxLayout(self.region_box)
         self.region_checks = {}
@@ -65,6 +66,14 @@ class DashboardModes:
         return self.regions != ("hands",) or (self.webcam and self.model == "wilor")
 
     @property
+    def supports_rig(self):
+        return not (self.webcam and self.model == "wilor")
+
+    @property
+    def rig_available(self):
+        return self.supports_rig and bool(getattr(self.owner.tracker, "calibration_available", False))
+
+    @property
     def enabled(self):
         return self.owner.inference_checkbox.isChecked() and bool(self.regions)
 
@@ -82,7 +91,7 @@ class DashboardModes:
             if wilor and self.webcam else
             "WiLoR supports hands only; calibrated fusion requires valid rig calibration."
             if wilor else
-            "Hands alone uses calibrated 3D when available. Body and Face use per-camera overlays.")
+            "All selected regions can use calibrated 3D when visible in at least two cameras.")
 
     def changed(self, *_):
         if hasattr(self.owner, "_landmarks"):
@@ -92,6 +101,7 @@ class DashboardModes:
         self._last_packet = None
         self.details.clear()
         self.owner.reset_kalman_filters()
+        self.owner.update_3d_view([], [])
         if getattr(self.owner, "is_running", False):
             self.owner.broadcast_landmarks([], 0)
             self.owner.broadcast_joint_angles([])
@@ -99,7 +109,7 @@ class DashboardModes:
         self.capabilities()
 
     def capabilities(self):
-        state = (self.uses_regions, bool(getattr(self.owner.tracker, "calibration_available", False)))
+        state = (self.model, self.uses_regions, self.rig_available)
         if state == self._cap_state:
             return
         self._cap_state = state
@@ -110,12 +120,12 @@ class DashboardModes:
             return
         if self.webcam:
             checkbox.setToolTip(
-                "Select MediaPipe Hands alone to use saved rig calibration."
-                if self.uses_regions else
-                "Show calibrated rig 3D; enable MediaPipe Hands inference to reconstruct landmarks."
-                if state[1] else
+                "Choose MediaPipe to use the webcam rig calibration."
+                if not self.supports_rig else
+                "Show calibrated rig 3D for the selected MediaPipe regions."
+                if self.rig_available else
                 "Rig 3D is disabled because calibration did not load; see the calibration notice above.")
-        if self.uses_regions:
+        if not self.supports_rig:
             if self._saved_3d is None:
                 self._saved_3d = checkbox.isChecked()
             if hasattr(self.owner, "_set_reconstruction_available"):
@@ -127,7 +137,7 @@ class DashboardModes:
                 control.setEnabled(False)
             self.owner.update_3d_view([], [])
         else:
-            available = bool(getattr(self.owner.tracker, "calibration_available", False))
+            available = self.rig_available
             if hasattr(self.owner, "_set_reconstruction_available"):
                 self.owner._set_reconstruction_available(available)
             else:
@@ -164,7 +174,7 @@ class DashboardModes:
                 return
             self.worker = None
         if self.worker is None or not self.worker.is_alive():
-            self.worker = RegionInferenceWorker(manager)
+            self.worker = RegionInferenceWorker(manager, tracker=self.owner.tracker)
             self.worker.start()
         options = dict(getattr(self.owner, "_wilor_options", {}))
         options.setdefault("confidence", self.owner.min_det_spin.value())
@@ -259,8 +269,12 @@ class DashboardModes:
             self._render_raw(manager)
             self.owner.status_label.setText(self.error)
             return True
-        self.owner.status_label.setText(state + " · per-camera overlays")
         if packet is None or time.perf_counter() - packet.finished_at > 1.:
+            self.owner.status_label.setText(state + " · per-camera overlays")
+            if self._last_packet is not None:
+                self._last_packet = None
+                self.owner.update_3d_view([], [])
+                self.owner.landmark_panel.invalidate("Waiting for fresh observations", clear_observations=True)
             self.owner.hands_label.setText("Waiting for results")
             self.owner.fps_label.setText("Inference: waiting")
             self._render_raw(manager)
@@ -286,8 +300,17 @@ class DashboardModes:
             face = sum(len(getattr(result, "faces", ())) for result in view.values())
             counts.append(f"Camera {source}: {hands} hands, {body} body, {face} face")
         self.details.setText("\n".join(counts))
-        self.owner.hands_label.setText("2D per view")
+        rig_status = ("Calibrated 3D active" if packet.reconstructed else "Rig 3D waiting for matching views"
+                      if self.rig_available else "2D per camera")
+        self.owner.hands_label.setText(rig_status)
+        self.owner.status_label.setText(state + " · per-camera overlays · " + rig_status)
         self.owner.tracked_hand_label.setText("Per-camera counts")
+        if self.rig_available and self.owner.show_3d_view and self.owner.analysis_tabs.currentIndex() == 0:
+            if packet is not self._last_packet or self._scene_dirty:
+                self.owner.update_3d_view([], [], regions=packet.reconstructed)
+                self._scene_dirty = False
+        else:
+            self._scene_dirty = True
         if packet is not self._last_packet:
             self.owner._landmarks.regions(packet)
             if self._last_packet is not None:
@@ -301,5 +324,5 @@ class DashboardModes:
         self.owner.frame_label.setText(f"Batches: {self.owner.frame_count}")
         stamps = [stamp for stamp in packet.received_at if stamp is not None]
         age = time.perf_counter() - min(stamps) if stamps else 0.
-        self.owner.timing_label.setText(f"Inference frame age: {age*1000:.0f} ms · 2D per camera")
+        self.owner.timing_label.setText(f"Inference frame age: {age*1000:.0f} ms")
         return True
