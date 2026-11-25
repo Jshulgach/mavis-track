@@ -327,6 +327,18 @@ def test_dashboard_live_mode_switch_and_error_recovery(backend, app, models, mon
             assert "Calibrated 3D active" in window.status_label.text()
             if wanted == ("hands", "pose", "face"):
                 assert not window.vis_3d_label.pixmap().isNull()
+                window.interactive_3d_checkbox.setChecked(True)
+                app.processEvents()
+                assert window.view_3d_panel.interactive
+                assert window.view_3d_panel.scene.isVisible() and not window.vis_3d_label.isVisible()
+                assert len(window.view_3d_panel.scene._objects) == 3
+                assert not window.view_3d_panel.scene.grab().isNull()
+                window.analysis_tabs.setCurrentIndex(1)
+                assert not window.view_3d_panel.isVisible()
+                window.analysis_tabs.setCurrentIndex(0)
+                assert window.view_3d_panel.scene.isVisible()
+                window.interactive_3d_checkbox.setChecked(False)
+                assert window.vis_3d_label.isVisible()
                 np.testing.assert_allclose(panel.observations[("mediapipe", "rig", "body")].points[0],
                                            [-.22, 0., 1.], atol=1e-6)
                 assert panel.observations[("mediapipe", "rig", "face")].units == "m"
@@ -441,11 +453,16 @@ def test_three_camera_dashboard_fits_small_screens_and_text_zoom(backend, size, 
         # A large 3D preview image must shrink inside the existing window.
         from PyQt5.QtGui import QPixmap
         window.vis_3d_label.setPixmap(QPixmap(1920, 1080))
-        window.vis_3d_label.show()
+        window.view_3d_panel.show()
         window._refresh_display()
         app.processEvents()
         assert window.width() == size[0] and window.height() == size[1]
         assert grid.width() >= 45 and window.vis_3d_label.width() >= 45
+        window.interactive_3d_checkbox.setChecked(True)
+        window._refresh_display()
+        app.processEvents()
+        assert window.width() == size[0] and window.height() == size[1]
+        assert window.view_3d_panel.scene.width() >= 45 and window.view_3d_panel.scene.height() >= 45
     finally:
         window.close()
         app.processEvents()
