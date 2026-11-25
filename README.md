@@ -88,6 +88,26 @@ dialog; detailed diagnostics are saved with each trial. See the
 [Vicon synchronization workflow](docs/vicon-sync.md) for hardware wiring,
 alignment reports and separate synchronized replay.
 
+## Control MAVIS from another app
+
+MAVIS 0.3.0 supports local recording control for webcams and OptiTrack. Start
+headless capture in one terminal, then send commands from another terminal or a
+trial controller on the same computer.
+
+```powershell
+mavis-track capture --backend webcam --output-root .\trials
+mavis-track control status
+mavis-track control start --trial-name Reach_01
+mavis-track control stop --trial-name Reach_01
+mavis-track control status
+```
+
+Wait for "MAVIS capture on 127.0.0.1:5015" before sending a request. The final
+status reports the video directory and whether finalization has finished.
+The same client works with either dashboard after enabling **Local UDP recording
+control**. For shared folders, the Python client, and OptiHub settings, see
+[External trial control](https://jshulgach.github.io/mavis-track/optitrack-recording/#local-camera-recording-control).
+
 ## Include MAVIS in your project
 
 The base package does not require Qt, pandas, or LSL. Add `mavis-track`

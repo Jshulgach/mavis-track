@@ -1,14 +1,20 @@
 # Changelog
 
-## Unreleased
+## mavis-track 0.3.0
 
-- Keep webcam calibration status visible independently of inference, distinguish loaded calibration from per-camera modes that pause rig 3D, and show expected/actual lens, format and resolution mismatches with restore guidance.
+- Add headless webcam and OptiTrack video capture with localhost recording control.
+  Dashboards and headless capture support the same camera-only commands, shared
+  trial folders, and finalization status. Add a terminal and Python client.
+- Support calibrated 3D for independently selected MediaPipe Hands, Body, and
+  Face in both dashboards.
+
+- Keep webcam calibration status visible independently of inference, show when calibrated 3D is available, and report expected/actual lens, format and resolution mismatches with restore guidance.
 
 - Add a shared Landmark tracker tab with named/searchable landmark selection, coordinate-labelled position/velocity/acceleration plots, bounded history, pause/clear controls and source-receipt timing. Reset derivative fits across loss, rejected points, identity changes and gaps; retain camera capture while switching tabs.
 
 - Match webcam display controls to OptiTrack with text zoom, monitor DPI refresh and fit/fill previews; wrap status text, stack smoothing fields and keep 3D previews within the window on small screens.
 
-- Add hands/body/face/combined MediaPipe selection and an independent inference toggle to both advanced camera dashboards. Load models and draw per-camera overlays in background workers without reopening cameras; disable calibrated hand outputs in region modes.
+- Add hands/body/face/combined MediaPipe selection and an independent inference toggle to both advanced camera dashboards. Load models and draw per-camera overlays in background workers without reopening cameras. Calibrated hand streams use the Hands-only mode.
 - Add optional WiLoR hand mesh/joint inference to the multi-webcam dashboard using one shared model, with live raw feeds during loading and recoverable dependency errors.
 
 - Make the advanced hands dashboard the default GUI for webcam and OptiTrack backends; retain explicit Studio/demo previews and compatibility with --advanced-hands.

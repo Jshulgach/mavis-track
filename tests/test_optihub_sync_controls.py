@@ -149,6 +149,7 @@ def test_gui_requires_apply_and_blocks_changes_while_recording(monkeypatch, rig)
         assert window.sync_preset_combo.window() == window.sync_dialog
         assert window.record_fps.window() == window.sync_dialog
         assert window.nexus_network_checkbox.window() == window.sync_dialog
+        assert window.local_udp.window() == window.sync_dialog
         assert window.trial_name_edit.window() == window
         assert not window.nexus_network_checkbox.isChecked()
         assert window.nexus_address_edit.text() == '172.26.116.93'

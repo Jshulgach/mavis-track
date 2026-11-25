@@ -25,7 +25,8 @@ class CameraRecording:
     """
 
     def __init__(self, directory, *, nominal_fps=100., camera_ids=(), camera_settings=(), queue_size=32,
-                 trial_name="trial", session_metadata=None, calibration_path=None, codec="MJPG"):
+                 trial_name="trial", session_metadata=None, calibration_path=None, codec="MJPG",
+                 require_all_cameras=False):
         if not 0 < nominal_fps <= 1000:
             raise ValueError("Video playback FPS must be between 0 and 1000")
         if type(queue_size) is not int or queue_size < 1:
@@ -51,6 +52,7 @@ class CameraRecording:
                                         sha256=hashlib.sha256(data).hexdigest())
         self.fps = float(nominal_fps)
         self.camera_ids = list(camera_ids)
+        self.require_all_cameras = require_all_cameras
         self.camera_settings = list(camera_settings)
         self._queue = queue.Queue(maxsize=queue_size)
         self._camera_queues = {}
@@ -263,6 +265,11 @@ class CameraRecording:
             if not self.written and not self.error:
                 with self._lock:
                     self.error = "No camera frames were recorded"
+            if self.require_all_cameras and not self.error:
+                missing = [str(i) for i in self.camera_ids if not self.frames_per_camera.get(i)]
+                if missing:
+                    with self._lock:
+                        self.error = f"No frames recorded for camera source(s) {', '.join(missing)}"
             try:
                 (self.directory / 'diagnostics.json').write_text(json.dumps({
                     "cameras": self.diagnostics.summary(), "queue_drops_by_kind": self.dropped_by_kind,
