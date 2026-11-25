@@ -304,10 +304,14 @@ def test_advanced_camera_selection_releases_tracking_before_setup(monkeypatch):
     monkeypatch.setattr(CameraManager, "create_configured", setup)
     gui = SimpleNamespace(
         is_running=True,
+        recording=SimpleNamespace(busy=True),
         stop_tracking=lambda: calls.append("stop"),
         start_tracking=lambda: calls.append("start"),
         camera_info_label=SimpleNamespace(setText=lambda value: calls.append(value)),
         status_label=SimpleNamespace(setText=lambda value: None))
+    StereoHandTrackerGUI._choose_webcams(gui)
+    assert not calls
+    gui.recording.busy = False
     StereoHandTrackerGUI._choose_webcams(gui)
     assert calls == ["stop", "setup", "Selected sources: [1, 4]", "start"]
 
