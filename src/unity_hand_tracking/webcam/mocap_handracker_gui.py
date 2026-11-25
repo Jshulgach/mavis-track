@@ -522,6 +522,9 @@ class StereoHandTrackerGUI(QMainWindow):
         self.exposure_grid.addWidget(QLabel("Camera source"), 0, 1)
         camera_layout.addLayout(self.exposure_grid)
         layout.addWidget(camera_group)
+        from handtrack.applications._webcam_recording_qt import WebcamRecordingControls
+        self.recording = WebcamRecordingControls(self)
+        layout.insertWidget(1, self.recording)
         # ---- Processing Options ----
         processing_group = QGroupBox("Processing")
         processing_layout = QVBoxLayout(processing_group)
@@ -775,6 +778,8 @@ class StereoHandTrackerGUI(QMainWindow):
 
     def _choose_webcams(self):
         """Release the active group before changing physical capture sources."""
+        if self.recording.busy:
+            return
         from mavis_track._webcam_settings import CameraSetupCancelled
         from unity_hand_tracking.webcam.multi_webcam import CameraManager
         was_running = self.is_running
@@ -1232,6 +1237,7 @@ class StereoHandTrackerGUI(QMainWindow):
             self._dashboard_modes.start()
             # Start GUI refresh timer (~60 Hz display rate)
             self.timer.start(16)
+            self.recording.refresh()
         except Exception as e:
             self.stop_tracking()
             self.stop_udp_broadcast()
@@ -1240,6 +1246,8 @@ class StereoHandTrackerGUI(QMainWindow):
 
     def stop_tracking(self):
         """Stop tracking."""
+        if self.recording.finish_before(self.stop_tracking):
+            return
         self.timer.stop()
         self._dashboard_modes.stop()
         # Stop the processing thread first
@@ -1258,6 +1266,7 @@ class StereoHandTrackerGUI(QMainWindow):
         self.start_btn.setStyleSheet("")
         self.status_label.setText("Status: Stopped")
         self.status_label.setStyleSheet("color: #ffffff;")
+        self.recording.refresh()
 
     # ------------------------------------------------------------------ #
     # Main frame loop
@@ -1764,6 +1773,9 @@ class StereoHandTrackerGUI(QMainWindow):
 
     def closeEvent(self, event):
         """Handle window close."""
+        if self.recording.finish_before(self.close, closing=True):
+            event.ignore()
+            return
         if self._dashboard_modes.closing():
             self.stop_tracking()
             self.status_label.setText("Waiting for inference model cleanup…")
@@ -1772,6 +1784,7 @@ class StereoHandTrackerGUI(QMainWindow):
             return
         self.stop_tracking()
         self.stop_udp_broadcast()
+        self.recording.close_controls()
         self.landmark_panel.timer.stop()
         event.accept()
 

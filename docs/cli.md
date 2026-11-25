@@ -14,6 +14,8 @@ for compatibility. Use `mavis-track COMMAND --help` for all options.
 | `board --backend webcam` | Generate calibration board |
 | `cameras --backend webcam` | Preview capture devices |
 | `record` | Record hands, or synchronized hands/body with `--mode hand-body` |
+| `capture` | Headless webcam or OptiTrack video service for a local trial controller |
+| `control` | Check, start, and stop a local MAVIS video recording |
 | `replay` | Draw recorded hands/body using saved timestamps |
 | `sync-report SESSION` | Audit raw camera videos and align them to a Vicon C3D using explicit anchors |
 | `sync-replay SESSION --vicon TRIAL.c3d` | Separate synchronized video/Vicon review window |

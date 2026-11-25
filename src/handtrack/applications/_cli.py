@@ -178,6 +178,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    from mavis_track import _headless_capture, capture
+
+    _headless_capture.add_arguments(subparsers.add_parser(
+        "capture", help="serve headless multi-camera video recording over local UDP"))
+    capture.add_arguments(subparsers.add_parser(
+        "control", help="check, start, or stop a local MAVIS recording"))
+
     gui_parser = subparsers.add_parser("gui", help="launch the advanced multi-camera hands dashboard")
     _add_backend_argument(gui_parser)
     gui_mode = gui_parser.add_mutually_exclusive_group()
@@ -445,6 +452,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("WiLoR supports hands only; use --mode hands")
     if args.command == "gui" and not args.advanced_hands and args.backend == "auto":
         args.backend = "webcam"
+
+    if args.command == "capture":
+        from mavis_track._headless_capture import run
+
+        try:
+            return run(args)
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"MAVIS capture: {exc}", file=sys.stderr)
+            return 1
+
+    if args.command == "control":
+        from mavis_track.capture import run as run_control
+
+        return run_control(args)
 
     selected_backend = None
     if hasattr(args, "backend"):

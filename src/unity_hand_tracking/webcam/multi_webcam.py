@@ -135,6 +135,7 @@ class CameraWorker(FrameBuffer, threading.Thread):
         self.ready = threading.Event()
         self.commands = queue.Queue(maxsize=8)
         self.geometry_locked = False
+        self.recorder = None
         self.settings_revision = 0
         self._settings = {"actual": {}, "confirmed": {}, "errors": {}, "backend": "",
                           "pending": False, "measured_fps": 0., "revision": 0,
@@ -154,6 +155,16 @@ class CameraWorker(FrameBuffer, threading.Thread):
         with self.lock:
             return copy.deepcopy(dict(self._settings, source=self.cam_index,
                                       status=self.status, error=self.error))
+
+    def publish_frame(self, frame):
+        super().publish_frame(frame)
+        recorder = self.recorder
+        if recorder is not None and self.frame_timestamp >= recorder.started:
+            recorder.frame(self.cam_index, frame, {
+                "host_received_monotonic": self.frame_timestamp,
+                "sdk_timing_available": False,
+                "settings_revision": self.settings_revision,
+            })
 
     def validate_request(self, settings=None, *, driver_dialog=False):
         settings = validate_settings(settings or {})
@@ -434,6 +445,8 @@ class CameraManager:
         self.bandwidth_retry_notice = ""
         self.workers = []
         self._stopping_workers = []
+        self.recorder = None
+        self._record_lock = threading.Lock()
 
     def _start_worker(self, source, exposure, settings):
         # Do not overlap native startup and settings negotiation for new streams.
@@ -550,6 +563,13 @@ class CameraManager:
 
     def stop_all(self):
         """Stop every worker and wait for cleanup."""
+        recording_error = None
+        try:
+            self.stop_recording()
+        except RuntimeError as exc:
+            if self.recorder is not None:
+                raise
+            recording_error = exc
         print("Shutting down webcam workers...")
         owned_workers = self.workers + self._stopping_workers
         for worker in owned_workers:
@@ -561,6 +581,46 @@ class CameraManager:
             raise RuntimeError(f"Camera workers did not stop: {alive}")
         self.workers.clear()
         self._stopping_workers.clear()
+        if recording_error is not None:
+            raise recording_error
+
+    def start_recording(self, directory, *, nominal_fps, trial_name, codec,
+                        calibration_path=None, session_metadata=None):
+        from mavis_track._camera_recording import CameraRecording
+
+        with self._record_lock:
+            if self.recorder is not None:
+                raise RuntimeError("A recording is already active")
+            if not self.workers or any(worker.get_snapshot()[0] is None for worker in self.workers):
+                raise RuntimeError("Wait for fresh frames from every selected camera")
+            recorder = CameraRecording(
+                directory, nominal_fps=nominal_fps, trial_name=trial_name, codec=codec,
+                camera_ids=[worker.cam_index for worker in self.workers],
+                camera_settings=self.get_settings_snapshot(), calibration_path=calibration_path,
+                session_metadata=dict(session_metadata or {}, backend="webcam", camera_timing="host receipt"),
+                require_all_cameras=True,
+            )
+            self.recorder = recorder
+            recorder.sync({
+                "available": False, "host_sampled_monotonic": time.perf_counter(),
+                "input_edge_recording_supported": False, "reason": "Webcam capture timestamps use host receipt",
+            })
+            for worker in self.workers:
+                worker.recorder = recorder
+            return recorder
+
+    def stop_recording(self):
+        with self._record_lock:
+            recorder = self.recorder
+            if recorder is None:
+                return
+            for worker in self.workers:
+                worker.recorder = None
+            try:
+                recorder.close()
+            finally:
+                if not recorder._thread.is_alive():
+                    self.recorder = None
 
     def reconfigure(self, indices, *, settings=None, expected_paths=None, retry_bandwidth=False):
         """Change only added/removed sources, retaining existing capture threads.
@@ -577,6 +637,8 @@ class CameraManager:
                                   for source, path in expected_paths.items() if path):
             raise RuntimeError("Camera identity changed. Reopen camera setup to refresh the list.")
         current = list(self.workers)
+        if self.recorder is not None:
+            raise ValueError("Stop recording before changing camera sources")
         if any(worker.geometry_locked for worker in current):
             raise ValueError("Stop tracking/calibration before changing camera sources")
         existing = {worker.cam_index: worker for worker in current}

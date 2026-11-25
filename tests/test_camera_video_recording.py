@@ -16,6 +16,15 @@ def rows(path):
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
+def test_require_all_cameras_marks_missing_source_incomplete(tmp_path):
+    writer = recording.CameraRecording(tmp_path / "session", camera_ids=[2, 7], require_all_cameras=True)
+    writer.frame(2, np.zeros((48, 64, 3), np.uint8), {"host_received_monotonic": time.perf_counter()})
+    with pytest.raises(RuntimeError, match=r"source\(s\) 7"):
+        writer.close()
+    manifest = json.loads((writer.directory / "manifest.json").read_text())
+    assert not manifest["complete"] and manifest["frames_per_camera"] == {"2": 1}
+
+
 def test_multicamera_roundtrip_preserves_frames_and_separate_timing(tmp_path):
     directory = tmp_path / "session"
     writer = recording.CameraRecording(directory, nominal_fps=100, camera_ids=[0, 1])

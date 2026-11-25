@@ -1,6 +1,6 @@
 """MAVIS frame processing API. Importing this module never opens a camera."""
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __all__ = [
     "BODY_LANDMARK_NAMES",
     "QUALITY_REGION_NAMES",

@@ -278,19 +278,6 @@ class StereoHandTrackerGUI(QMainWindow):
         self._display_refresh_timer.timeout.connect(self._refresh_display)
         self.init_ui()
         self.setup_timer()
-        self._capture_control = None
-        control_port = os.environ.get('MAVIS_CAPTURE_CONTROL_PORT')
-        if control_port:
-            from mavis_track._capture_control import CaptureControl
-            try:
-                self._capture_control = CaptureControl(self, int(control_port))
-            except (OSError, ValueError, OverflowError) as exc:
-                self.record_status.setText(f'Local capture control unavailable: {exc}')
-                print(f'[Capture control] {exc}')
-            else:
-                self._capture_control_timer = QTimer(self)
-                self._capture_control_timer.timeout.connect(self._capture_control.poll)
-                self._capture_control_timer.start(50)
         # Auto-start broadcasting after UI is initialized
         if model == "mediapipe":
             self.start_udp_broadcast()
@@ -562,6 +549,9 @@ class StereoHandTrackerGUI(QMainWindow):
             "A name change alone does not confirm capture; check Nexus's frame counter.")
         network_help.setWordWrap(True)
         sync_layout.addWidget(network_help)
+        from handtrack.applications._capture_control_qt import LocalCaptureSettings
+        self.local_udp = LocalCaptureSettings(self, sync_body)
+        sync_layout.addWidget(self.local_udp)
         sync_close = QPushButton("Close")
         sync_close.clicked.connect(self.sync_dialog.close)
         sync_layout.addWidget(sync_close)
@@ -1038,7 +1028,7 @@ class StereoHandTrackerGUI(QMainWindow):
             self._dashboard_modes.error = None
         self._dashboard_modes.apply()
 
-    def _toggle_recording(self):
+    def _toggle_recording(self, *, directory=None):
         manager = self._capture_manager()
         if manager is None:
             return
@@ -1049,18 +1039,17 @@ class StereoHandTrackerGUI(QMainWindow):
                 issue = self._recording_sync_issue(manager)
                 if issue:
                     raise RuntimeError(issue)
-                parent = self.record_directory_edit.text().strip()
-                if not parent:
-                    parent = self._choose_record_directory()
-                if not parent:
-                    return
                 name = self.trial_name_edit.text().strip()
                 remote = None
                 if self.nexus_network_checkbox.isChecked():
                     from mavis_track._nexus_remote import NexusRemote
                     remote = NexusRemote(self.nexus_address_edit.text().strip(), self.nexus_port_spin.value())
                     remote.validate_name(name)
-                directory = trial_directory(parent, name)
+                if directory is None:
+                    parent = self.record_directory_edit.text().strip() or self._choose_record_directory()
+                    if not parent:
+                        return
+                    directory = trial_directory(parent, name)
                 calibration_path = getattr(self._wilor_session, 'calibration_path', None) or CALIBRATION_FILE
                 manager.start_recording(directory, nominal_fps=self.record_fps.value(), trial_name=name,
                                         calibration_path=calibration_path,
@@ -2679,9 +2668,8 @@ class StereoHandTrackerGUI(QMainWindow):
             event.ignore()
             return
         self.stop_udp_broadcast()
-        if self._capture_control is not None:
-            self._capture_control_timer.stop()
-            self._capture_control.close()
+        self.sync_dialog.close()
+        self.local_udp.shutdown()
         self.landmark_panel.timer.stop()
         event.accept()
 

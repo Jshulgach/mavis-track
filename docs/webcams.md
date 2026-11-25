@@ -62,6 +62,30 @@ Override this location with `MAVIS_WEBCAM_PROFILE`. Known DirectShow device path
 allow saved settings to follow cameras when numeric USB source indices change.
 Where identities cannot be verified, check camera order from the previews.
 
+## Record a trial
+
+Open the dashboard with `mavis-track gui --backend webcam`. Use **Choose
+cameras…** to select one or more sources, then **Start selected cameras**.
+In **Recording**, enter a trial name and select a video output folder.
+**Recording / sync setup…** offers playback FPS, MJPG or lossless FFV1,
+and optional Nexus network start/stop. Set playback FPS close to the
+webcam's measured rate. It controls the AVI playback speed.
+
+Use **Start Recording** and **Stop Recording** to save a raw AVI for each
+selected camera, with the source ID and frame timing in `frames.jsonl`.
+Recording runs independently of inference. Stopping the cameras or closing
+the dashboard finishes the writers first. A trial is marked incomplete
+if any selected camera produced no saved frames.
+
+For a separate trial controller, check **Enable local UDP control** in
+**Recording / sync setup…** and click **Apply UDP settings**.
+Use the same port in the controller (default `5015`).
+See the [localhost camera recording protocol](optitrack-recording.md#local-camera-recording-control).
+Leave Nexus network requests off for camera-only control.
+Webcam frame timestamps use the host clock when a frame is received.
+OptiHub presets, exposure pulse output and hardware frame timestamps
+are unavailable through the webcam backend.
+
 ## Calibrate
 
 ```powershell
@@ -138,6 +162,8 @@ image, preserving inference and calibration inputs.
 mavis-track gui --backend webcam
 ```
 
+The advanced multi-camera dashboard is the default for every camera backend.
+
 The source numbers belong to the selected Windows capture backend. **Auto**
 chooses one backend for the group, preferring DirectShow when it discovers
 cameras there. Changing backends remaps cameras by device path where possible.
@@ -148,7 +174,6 @@ feeds and lists the failed source in **Camera Setup**. The camera setup dialog
 also keeps successful previews running. Uncheck failed sources before saving a
 different selection. Calibrated 3D still requires a compatible camera set.
 
-The advanced multi-camera dashboard is the default for every camera backend.
 The tracking panel keeps a separate calibration notice visible while inference is
 off. Before startup it reports whether the configured file exists; starting
 cameras validates that file against the selected devices, mode and lens settings.

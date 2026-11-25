@@ -31,6 +31,87 @@ Playback FPS, codec, sync presets and optional Nexus network control are inside
 indicator; detailed counters/errors are in its tooltip and saved logs. Review
 tools open separately. See [Vicon trial workflow](vicon-sync.md).
 
+### Local camera recording control
+
+In the OptiTrack or [webcam dashboard](webcams.md#record-a-trial), open
+**Recording / sync setup…**, check **Enable local UDP control**, enter the
+port (default `5015`), and click **Apply UDP settings**. Start cameras, choose
+the video output folder, and leave **Send Nexus start/stop over network**
+unchecked for camera-only remote recording. The listener binds to
+`127.0.0.1` for the current dashboard session. For scripted launches,
+`MAVIS_CAPTURE_CONTROL_PORT` can still preconfigure it. A local application can
+send a JSON datagram such as:
+
+```json
+{"mode":"camera","action":"start","trial_name":"Reach_01","request_id":"abc123"}
+```
+
+Use `status` to check `camera_ready` or recover from a missing reply. Replies
+echo `request_id` and include `camera_trial` with the last remotely started
+trial name, directory, activity flag and recorder error. Use a unique trial
+name for each recording. Repeating Start for the most recent trial returns
+its state. Stop applies only to the matching remotely started recording.
+During finalization, poll Status until `finishing` is false, then inspect the
+recording manifest. A Start reply confirms the recorder was created. Frame
+counts and timing come from the saved files. Requests with no mode use the
+existing Nexus control.
+
+### Headless capture
+
+On the same computer as your trial controller, start MAVIS with one of these
+commands. Use the output directory where the controller should create trial folders.
+
+```powershell
+mavis-track capture --backend webcam --output-root .\trials --camera-index 0 --camera-index 1
+mavis-track capture --backend optitrack --output-root .\trials --sync-preset internal_50hz
+```
+
+Webcams use the saved camera profile by default. Use **Choose cameras** in the
+dashboard once to save identities, exposure and capture modes, or pass
+`--webcam-profile` to use a specific saved profile. OptiTrack requires a
+compatible native binding and USB drivers. `--sync-preset` can apply
+`internal_50hz` or `vicon_external_50hz` with a compatible binding.
+Set `--playback-fps` to match the capture rate and `--codec FFV1` if you
+need lossless decoded frames. `--calibration PATH` validates and snapshots
+matching rig geometry alongside the videos. The capture command saves raw
+camera frames and timestamps. For live landmark overlays and calibrated
+reconstruction, use the dashboard.
+
+By default, headless capture and the CLI client use port 5015. Use `--port`
+on both commands for a different port. Only clients on the same computer
+can connect. Ctrl+C finalizes an active recording and releases the cameras.
+The capture process does not send Nexus commands. Use the dashboard for
+the existing combined Nexus/MAVIS trigger.
+
+```powershell
+mavis-track control status
+mavis-track control start --trial-name Reach_01
+mavis-track control stop --trial-name Reach_01
+mavis-track control status
+```
+
+For Python controllers, use the same request and response contract.
+
+```python
+from mavis_track.capture import capture_request
+
+status = capture_request("status")
+if not status["camera_ready"]:
+    raise RuntimeError(status["detail"])
+capture_request("start", trial_name="Reach_01")
+# End the trial later, then poll status until finishing is false.
+capture_request("stop", trial_name="Reach_01")
+```
+
+For a shared trial directory, use `output_root` from the status response
+and verify `shared_output_supported`. Create `<output_root>/<trial_name>`,
+then pass `shared_output_root=output_root` to `capture_request("start", ...)`
+or use `--shared-output-root` with the CLI. MAVIS writes video to the
+`video` subfolder. After `finishing` becomes false, confirm the manifest
+and frame counts before reporting the trial saved. Video and EMG commands
+coordinate the trial lifecycle. A shared TTL and visible LED marker are
+needed for frame-level alignment.
+
 ## Session files
 
 | File | Contents |
