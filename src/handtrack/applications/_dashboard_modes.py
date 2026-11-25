@@ -192,6 +192,7 @@ class DashboardModes:
             self.owner._queue_display_refresh()
 
     def stop(self):
+        self.owner.view_3d_panel.clear()
         self.owner.landmark_panel.invalidate("Cameras stopped; history retained", clear_observations=True)
         self._stopping = True
         self._cap_state = None

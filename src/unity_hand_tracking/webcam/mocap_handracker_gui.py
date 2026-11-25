@@ -276,8 +276,11 @@ class StereoHandTrackerGUI(QMainWindow):
             "background-color: #000; border: 1px solid #555;"
         )
         self.vis_3d_label.setAlignment(Qt.AlignCenter)
-        self.vis_3d_label.hide()
-        self.splitter.addWidget(self.vis_3d_label)
+        from handtrack.applications._metric_view import ReconstructionPanel
+
+        self.view_3d_panel = ReconstructionPanel(self.vis_3d_label)
+        self.view_3d_panel.hide()
+        self.splitter.addWidget(self.view_3d_panel)
         # Control panel (right side)
         control_panel = self.create_control_panel()
         self.control_panel = control_panel
@@ -331,6 +334,7 @@ class StereoHandTrackerGUI(QMainWindow):
         font.setPointSizeF(max(1., self._control_font.pointSizeF()) * self.text_size_spin.value()/100)
         apply_text_font(self.control_panel, font)
         self.landmark_panel.apply_font(font)
+        self.view_3d_panel.setFont(font)
         self.control_scroll_area.setMinimumWidth(min(280, max(200, self.width()//2)))
         self.control_panel.ensurePolished()
         self.control_panel.layout().activate()
@@ -338,7 +342,7 @@ class StereoHandTrackerGUI(QMainWindow):
                         self.control_panel.minimumSizeHint().width())+48
         width = min(max(280, preferred), max(280, int(self.width()*.48)))
         remaining = max(1, self.splitter.width()-width-12)
-        if self.vis_3d_label.isHidden():
+        if self.view_3d_panel.isHidden():
             self.splitter.setSizes([remaining, 0, width])
         else:
             self.splitter.setSizes([remaining*2//5, remaining*3//5, width])
@@ -595,6 +599,11 @@ class StereoHandTrackerGUI(QMainWindow):
         self.cb_3d_iso.toggled.connect(lambda c: setattr(self, "show_3d_iso", c))
         views_3d_layout.addWidget(self.cb_3d_iso)
 
+        self.interactive_3d_checkbox = QCheckBox("Interactive 3D")
+        self.interactive_3d_checkbox.setToolTip("Orbit, pan, and zoom the calibrated workspace in metres.")
+        self.interactive_3d_checkbox.toggled.connect(self.view_3d_panel.set_interactive)
+        self.interactive_3d_checkbox.toggled.connect(views_3d_group.setDisabled)
+        processing_layout.addWidget(self.interactive_3d_checkbox)
         processing_layout.addWidget(views_3d_group)
         layout.addWidget(processing_group)
         # ---- Smoothing / Jitter ----
@@ -867,7 +876,7 @@ class StereoHandTrackerGUI(QMainWindow):
 
     def on_show_3d_toggled(self, checked):
         self.show_3d_view = checked
-        self.vis_3d_label.setVisible(bool(checked) and self.analysis_tabs.currentIndex() == 0)
+        self.view_3d_panel.setVisible(bool(checked) and self.analysis_tabs.currentIndex() == 0)
         self._queue_display_refresh()
 
     def on_overlay_toggled(self, checked):
@@ -1515,8 +1524,11 @@ class StereoHandTrackerGUI(QMainWindow):
                     self.jitter_label.setText(
                         f"Jitter (raw/filtered): {raw_std:.4f} / {filt_std:.4f}"
                     )
-            if self.show_3d_view and triangulated_hands_data and self.analysis_tabs.currentIndex() == 0:
-                self.update_3d_view(raw_hands, filtered_hands)
+            if self.show_3d_view and self.analysis_tabs.currentIndex() == 0:
+                if triangulated_hands_data:
+                    self.update_3d_view(raw_hands, filtered_hands, masks=masks)
+                else:
+                    self.view_3d_panel.scene.clear_scene()
             self.frame_count += 1
             self.frame_label.setText(f"Frames: {self.frame_count}")
             self.hands_label.setText(f"Hands: {num_hands}")
@@ -1559,8 +1571,14 @@ class StereoHandTrackerGUI(QMainWindow):
     # ------------------------------------------------------------------ #
     # 3D Visualization
     # ------------------------------------------------------------------ #
-    def update_3d_view(self, raw_hands, filtered_hands, *, regions=None):
-        """Render 3D visualization (Top, Front, Side, Isometric views)."""
+    def update_3d_view(self, raw_hands, filtered_hands, *, regions=None, masks=None):
+        """Update the interactive workspace or the fixed 3D projections."""
+        self.view_3d_panel.scene.set_scene(
+            filtered_hands, masks=masks, regions=regions,
+            raw_hands=raw_hands if self.show_raw_filtered_overlay else None,
+        )
+        if self.view_3d_panel.interactive:
+            return
         w, h = 600, 600
         canvas = np.full((h, w, 3), 40, dtype=np.uint8)
 

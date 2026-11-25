@@ -342,7 +342,7 @@ class LandmarkDashboard:
         owner.landmark_panel = self.panel
 
     def _tab_changed(self, *_):
-        self.owner.vis_3d_label.setVisible(self.tabs.currentIndex() == 0 and self.owner.show_3d_view)
+        self.owner.view_3d_panel.setVisible(self.tabs.currentIndex() == 0 and self.owner.show_3d_view)
         self.owner._queue_display_refresh()
         self.panel._dirty = True
 

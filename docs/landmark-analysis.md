@@ -15,6 +15,20 @@ show x/y only. Colours are consistent across plots. **Pause plots** freezes the
 display while inference continues; **Clear plots** clears this analysis history.
 Neither action starts recording or changes camera capture.
 
+## Interactive 3D workspace
+
+With rig calibration loaded, turn on **Show 3D View** and select
+**Interactive 3D** in the Cameras tab. The grid and XYZ axes use calibrated
+camera-0 coordinates in metres. The origin is the first camera in the saved
+calibration order, and the XZ grid marks the rig reference plane.
+
+Left-drag to orbit, right- or middle-drag to pan, and scroll to zoom. Hover a
+landmark to read its XYZ coordinates. The readout also shows the current
+landmark span along each axis. **Fit data** frames the reconstruction and
+**Reset view** returns to the rig origin. Fit and zoom change the on-screen
+magnification while the calibrated coordinates stay fixed. Clear **Interactive 3D**
+to return to the fixed views.
+
 ## Coordinates and units
 
 | Signal | Position | Velocity / acceleration | Meaning |

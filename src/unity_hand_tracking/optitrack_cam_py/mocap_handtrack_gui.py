@@ -314,8 +314,11 @@ class StereoHandTrackerGUI(QMainWindow):
             "background-color: #000; border: 1px solid #555;"
         )
         self.vis_3d_label.setAlignment(Qt.AlignCenter)
-        self.vis_3d_label.hide()
-        self.display_splitter.addWidget(self.vis_3d_label)
+        from handtrack.applications._metric_view import ReconstructionPanel
+
+        self.view_3d_panel = ReconstructionPanel(self.vis_3d_label)
+        self.view_3d_panel.hide()
+        self.display_splitter.addWidget(self.view_3d_panel)
         # Control panel (right side)
         control_panel = self.create_control_panel()
         self.control_panel = control_panel
@@ -370,6 +373,7 @@ class StereoHandTrackerGUI(QMainWindow):
         font.setPointSizeF(max(1., self._control_font.pointSizeF()) * self.text_size_spin.value()/100)
         apply_text_font(self.control_panel, font)
         self.landmark_panel.apply_font(font)
+        self.view_3d_panel.setFont(font)
         self.control_scroll.setMinimumWidth(min(280, max(200, self.width()//2)))
         self.control_panel.ensurePolished()
         self.control_panel.layout().activate()
@@ -377,7 +381,7 @@ class StereoHandTrackerGUI(QMainWindow):
                         self.control_panel.minimumSizeHint().width())+48
         width = min(max(280, preferred), max(280, int(self.width()*.48)))
         remaining = max(1, self.display_splitter.width()-width-12)
-        if self.vis_3d_label.isHidden():
+        if self.view_3d_panel.isHidden():
             self.display_splitter.setSizes([remaining, 0, width])
         else:
             self.display_splitter.setSizes([remaining*2//5, remaining*3//5, width])
@@ -396,7 +400,8 @@ class StereoHandTrackerGUI(QMainWindow):
         measured_skeleton = (available and self.inference_model != 'wilor'
                              and not self._dashboard_modes.uses_regions)
         self.show_3d_checkbox.setEnabled(available)
-        self.views_3d_group.setEnabled(available)
+        self.interactive_3d_checkbox.setEnabled(available)
+        self.views_3d_group.setEnabled(available and not self.view_3d_panel.interactive)
         self.occlusion_spin.setEnabled(available)
         self.kalman_checkbox.setEnabled(measured_skeleton)
         self.smoothing_group.setEnabled(measured_skeleton)
@@ -407,8 +412,8 @@ class StereoHandTrackerGUI(QMainWindow):
         if not available:
             self.show_3d_checkbox.setChecked(False)
             self.show_3d_view = False
-            self.vis_3d_label.clear()
-            self.vis_3d_label.hide()
+            self.view_3d_panel.clear()
+            self.view_3d_panel.hide()
 
     def _show_calibration_status(self):
         available = self.tracker.calibration_available
@@ -754,6 +759,11 @@ class StereoHandTrackerGUI(QMainWindow):
         self.cb_3d_palm.toggled.connect(lambda c: setattr(self, "show_3d_palm", c))
         views_3d_layout.addWidget(self.cb_3d_palm)
 
+        self.interactive_3d_checkbox = QCheckBox("Interactive 3D")
+        self.interactive_3d_checkbox.setToolTip("Orbit, pan, and zoom the calibrated workspace in metres.")
+        self.interactive_3d_checkbox.toggled.connect(self.view_3d_panel.set_interactive)
+        self.interactive_3d_checkbox.toggled.connect(views_3d_group.setDisabled)
+        processing_layout.addWidget(self.interactive_3d_checkbox)
         processing_layout.addWidget(views_3d_group)
         layout.addWidget(processing_group)
         # ---- Splay Calibration ----
@@ -1291,7 +1301,7 @@ class StereoHandTrackerGUI(QMainWindow):
             self.show_3d_checkbox.setChecked(False)
             return
         self.show_3d_view = checked
-        self.vis_3d_label.setVisible(bool(checked) and self.analysis_tabs.currentIndex() == 0)
+        self.view_3d_panel.setVisible(bool(checked) and self.analysis_tabs.currentIndex() == 0)
         self._queue_display_refresh()
 
     def on_overlay_toggled(self, checked):
@@ -1765,14 +1775,15 @@ class StereoHandTrackerGUI(QMainWindow):
                           f'{hand.joint_reprojection_rms_px:.2f} px; mesh fit {hand.mesh_fit_rms_mm:.1f} mm'
                           for hand in hands))
             key = (id(packet), self.hand_preference, self.show_3d_top, self.show_3d_front,
-                   self.show_3d_side, self.show_3d_iso, self.show_3d_palm, self.show_3d_view)
+                   self.show_3d_side, self.show_3d_iso, self.show_3d_palm, self.show_3d_view,
+                   self.view_3d_panel.interactive)
             if self.show_3d_view and self.analysis_tabs.currentIndex() == 0 and key != self._wilor_3d_key:
                 self.update_3d_view([hand.joints for hand in hands], [hand.joints for hand in hands],
                                     meshes=[hand.vertices for hand in hands], faces=session.faces)
                 self._wilor_3d_key = key
         else:
             self._wilor_3d_key = None
-            self.vis_3d_label.clear()
+            self.view_3d_panel.clear()
             self.tracked_hand_label.setText('3D: waiting for consistent multi-view hands'
                                            if session.calibration_available else '3D: local preview only')
             self.tracked_hand_label.setToolTip('Calibrated mesh placement requires matching hands in at least two cameras.')
@@ -2231,8 +2242,11 @@ class StereoHandTrackerGUI(QMainWindow):
                     self.jitter_label.setText(
                         f"Jitter (raw/filtered): {raw_std:.4f} / {filt_std:.4f}"
                     )
-            if self.show_3d_view and triangulated_hands_data and self.analysis_tabs.currentIndex() == 0:
-                self.update_3d_view(raw_hands, filtered_hands)
+            if self.show_3d_view and self.analysis_tabs.currentIndex() == 0:
+                if triangulated_hands_data:
+                    self.update_3d_view(raw_hands, filtered_hands, masks=masks)
+                else:
+                    self.view_3d_panel.scene.clear_scene()
             self.frame_count += 1
             self.frame_label.setText(f"Frames: {self.frame_count}")
             if self.tracker.calibration_available:
@@ -2281,8 +2295,15 @@ class StereoHandTrackerGUI(QMainWindow):
     # ------------------------------------------------------------------ #
     # 3D Visualization
     # ------------------------------------------------------------------ #
-    def update_3d_view(self, raw_hands, filtered_hands, meshes=None, faces=None, *, regions=None):
-        """Render 3D visualization (Top, Front, Side, Isometric views)."""
+    def update_3d_view(self, raw_hands, filtered_hands, meshes=None, faces=None, *, regions=None, masks=None):
+        """Update the interactive workspace or the fixed 3D projections."""
+        self.view_3d_panel.scene.set_scene(
+            filtered_hands, masks=masks, regions=regions,
+            raw_hands=raw_hands if self.show_raw_filtered_overlay and meshes is None else None,
+            meshes=meshes, faces=faces,
+        )
+        if self.view_3d_panel.interactive:
+            return
         w, h = 600, 600
         canvas = np.full((h, w, 3), 40, dtype=np.uint8)
 
